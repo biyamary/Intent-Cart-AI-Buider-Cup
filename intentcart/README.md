@@ -1,6 +1,6 @@
 # IntentCart scaffold
 
-A shopping assistant with two flows: **Food label review** and **Clothes look planning**. This is a runnable foundation, with prompts and unfinished integrations deliberately marked as placeholders.
+A shopping assistant with two flows: **Food label review** and **Shop a look**. The stylist supports real Google ADK conversations with optional Google Search, currently disabled by default. Food generation and structured look-board integrations remain scaffold placeholders.
 
 The architecture document is used as product context. Your request takes precedence: **Google ADK replaces LangGraph**, and all model steps use configurable Gemini models. No cloud resources were created or deployed.
 
@@ -32,13 +32,19 @@ npm run dev
 - API docs and request examples: <http://127.0.0.1:8000/docs>
 - Health: <http://127.0.0.1:8000/api/health>
 
-No API keys are needed for the default demo. Demo mode uses **one shared local user**, keeps data in process memory, and resets when the server restarts. Run one API worker locally. Do not expose this configuration as a private multi-user service.
+No API keys are needed for the sample board and Food demo. Demo auth uses **one shared local user**; profile/board data stays in process memory and resets when the API restarts. Chat history uses a separate local SQLite store by default. Run one API worker locally. Do not expose demo auth as a private multi-user service.
+
+For live **Shop a look**, add `STYLIST_AGENT_MODE=gemini` and your server-side `GOOGLE_API_KEY` to `backend/.env`, keeping `AGENT_MODE=demo` if Food should remain a demo. Restart the API and open Clothes. See [conversational agents](docs/agents.md) for architecture, configuration, and the live smoke test.
+
+Keep `STYLIST_SEARCH_ENABLED=false` for conversational styling without browsing. To enable Google Search later, choose a compatible model/project with available grounding quota, set `STYLIST_SEARCH_ENABLED=true`, and restart the backend.
 
 ## Try the flows
 
 **Food:** save `milk, peanut` as allergies in My profile → Food → Try a sample label → Review ingredients → edit and confirm the ingredient, contains, and may-contain fields → review keyword matches and unverified regulatory entries → ask a follow-up (explicit placeholder response). Recent labels can be reopened.
 
-**Clothes:** enter an occasion and budget (try ₹6,000) → edit the checklist → mark existing pieces owned or skip them → confirm → select sample products → swap a selection to release its budget → resolve all remaining categories → assemble the look. Recent looks can be reopened.
+**Shop a look:** say “I want an outfit for my sister's mehendi” → answer the stylist's questions → provide a budget and preferences → get outfit ideas and budget targets → refine the suggestions in conversation. Chats can be resumed from the sidebar. Text input is supported; reference images come later. Live product search is available when explicitly enabled.
+
+**Sample board (`/clothes/board`):** enter an occasion and budget → edit and confirm the checklist → select sample products → swap, own or remove pieces → assemble the look. This remains separate from agent chat for now.
 
 Prices are integer paise in the API; ₹6,000 is `600000`. The backend recomputes allocations and validates selections. The client never supplies a trusted price.
 
@@ -48,16 +54,16 @@ Prices are integer paise in the API; ₹6,000 is `600000`. The backend recompute
 | --- | --- |
 | React / Vite / TypeScript / Tailwind | Responsive Home, Food, Clothes, Profile; loading/error states; React Query and Zustand |
 | FastAPI | Typed REST contracts, OpenAPI, user-scoped records, confirmation boundaries, same-origin static serving |
-| Google ADK + Gemini | Five schema-constrained agent factories; shared `Runner` adapter; timeout handling; editable Markdown prompt placeholders |
+| Google ADK + Gemini | Conversational stylist with optional native Google Search; shared agent factory/registry, persistent sessions, limits and grounding. Five earlier structured step prompts remain placeholders |
 | Food text | Basic parser, editable confirmation, limited deterministic allergen keyword matching, structured report and scan history |
 | Food barcode | ZXing camera component; opt-in Open Food Facts adapter, with text fallback |
 | Food photo | Validated upload route wired to an ADK extraction agent; disabled until its prompt and Gemini credentials are supplied |
 | Food evidence | Empty regulation corpus; E-number findings remain unverified. Ingredient explanations, normalization beyond lowercasing, diet checks, and age notes are placeholders |
 | Clothes | Checklist confirmation; deterministic allocation; 14 illustrative seed products; lock/swap/owned/remove; final totals |
-| Clothes discovery | Live grounding/ranking and reference-image interpretation are extension points; seed prices are fictional and have no retailer links or fetched timestamps |
+| Clothes discovery | Stylist suggests outfit ideas and can search/cite sources when search is enabled. Structured product discovery/ranking, board mutation tools and reference-image interpretation are future extensions |
 | Auth / memory | Working local adapter; Firebase token verification, Google sign-in, and Firestore adapters included but not cloud-tested |
 | PWA / container | App-shell PWA configuration, manifest and icon; multi-stage Dockerfile for one Cloud Run service |
-| Deferred | SSE progress transport, persistent ADK conversation sessions, cloud image history, checkout, price tracking, furniture and accessories |
+| Deferred | SSE progress, shared production session storage, cloud image history, checkout, price tracking, furniture and accessories |
 
 The demo matching dictionary is incomplete and can produce both missed and false matches. It is for exercising the flow, not determining medical suitability. The app never uses an absence of findings as a safety verdict.
 
@@ -98,7 +104,7 @@ intentcart/
 
 ## Connect the real services
 
-1. Replace each relevant `TODO_PROMPT` in `backend/app/agents/prompts/`. Keeping this marker makes the runtime return HTTP 501 before any model call. The prompts describe expected inputs/outputs but intentionally do not implement agent behavior.
+1. The new `stylist_conversation.md` prompt is implemented. For the remaining structured steps, replace each relevant `TODO_PROMPT` in `backend/app/agents/prompts/`; unchanged markers return HTTP 501 before a model call.
 2. Set `GOOGLE_API_KEY`, `GEMINI_MODEL`, `GEMINI_LITE_MODEL`, and `AGENT_MODE=gemini` in `backend/.env`. The key stays on the server. Select explicit model IDs available to your project using the [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models); the default latest aliases are scaffolding conveniences and are not pinned model versions. Run a small smoke call after configuring prompts.
 3. For barcode lookup, set `ENABLE_OPEN_FOOD_FACTS=true` and a real contact in `OPEN_FOOD_FACTS_USER_AGENT`. Review [Open Food Facts API requirements](https://openfoodfacts.github.io/openfoodfacts-server/api/) and its data licensing before publishing.
 4. For Firebase, enable Google sign-in and Firestore, set `GOOGLE_CLOUD_PROJECT`, `AUTH_MODE=firebase`, `STORE_BACKEND=firestore`, and use Application Default Credentials. Configure the matching `VITE_FIREBASE_*` values and `VITE_AUTH_MODE=firebase` in `frontend/.env`. Add the frontend origin to Firebase's authorized domains. The backend uses the Admin SDK; direct client database access is denied by `firestore.rules`.

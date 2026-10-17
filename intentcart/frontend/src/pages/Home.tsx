@@ -89,9 +89,9 @@ export function Home() {
               <br />
               Your kind of look.
             </h2>
-            <p>Start with a brief. Build your checklist. Find the pieces that fit your budget.</p>
+            <p>Tell your stylist about the occasion. Explore ideas and find options together.</p>
             <span className="flow-link">
-              Build a look <ArrowUpRight size={20} />
+              Shop a look <ArrowUpRight size={20} />
             </span>
           </Link>
         </div>

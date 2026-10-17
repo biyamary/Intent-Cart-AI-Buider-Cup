@@ -7,9 +7,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.agents.runtime import AgentRuntime
+from app.agents.conversations import ConversationService, create_session_service
 from app.config import Settings, get_settings
 from app.memory.store import FirestoreStore, MemoryStore
-from app.routers import clothes, food, profile
+from app.routers import agents, clothes, food, profile
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -24,9 +25,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 firebase_admin.get_app()
             except ValueError:
                 firebase_admin.initialize_app(options={"projectId": settings.google_cloud_project})
-        if settings.agent_mode == "gemini":
+        if "gemini" in (settings.agent_mode, settings.stylist_mode):
             os.environ["GOOGLE_API_KEY"] = settings.google_api_key.get_secret_value()
-        yield
+        app.state.conversations = ConversationService(settings, create_session_service(settings))
+        try:
+            yield
+        finally:
+            await app.state.conversations.close()
 
     app = FastAPI(title="IntentCart API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -48,11 +53,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "agent_mode": settings.agent_mode,
+            "stylist_agent_mode": settings.stylist_mode,
             "auth_mode": settings.auth_mode,
             "store": settings.store_backend,
         }
 
-    for router in (profile.router, food.router, clothes.router):
+    for router in (profile.router, food.router, clothes.router, agents.router):
         app.include_router(router, prefix="/api")
 
     dist = settings.frontend_dist.resolve()

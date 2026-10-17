@@ -19,6 +19,7 @@ COPY backend/app ./app
 RUN uv sync --frozen --no-dev --extra cloud
 COPY --from=frontend /build/dist /app/frontend/dist
 RUN useradd --create-home appuser
+RUN mkdir -p /app/backend/.data && chown appuser:appuser /app/backend/.data
 USER appuser
 ENV PATH="/app/backend/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PORT=8080
 EXPOSE 8080

@@ -1,5 +1,9 @@
 # Architecture and flow boundaries
 
+The Clothes entry point is now conversational: see [agents.md](agents.md) for the
+stylist, shared agent factory, persistent ADK sessions, and generic chat API. The
+deterministic look-board workflow below remains available at `/clothes/board`.
+
 ```mermaid
 flowchart TD
     UI[React / Vite / TypeScript] --> API[FastAPI + identity]
@@ -32,7 +36,7 @@ The current API is request/response JSON. A future SSE adapter should emit typed
 
 `users/{uid}` stores the profile. `users/{uid}/scans/{id}` and `users/{uid}/looks/{id}` store flow records. The uid comes only from the verified token (or the fixed local demo user), never a request body. API schemas reject extra fields.
 
-Each ADK invocation uses a temporary `InMemorySessionService` session with explicit input context, cleaned up afterward. This is separate from durable business state. Implement persistent ADK sessions if multi-turn model memory is later required; do not put allergy profiles in global cross-user agent state.
+Structured Food/board step invocations use temporary ADK sessions with explicit input context. The new conversational stylist uses persistent ADK sessions (SQLite locally) and a shared runner. These are separate from Firestore business records. Neither path puts user data in global agent state; the stylist receives only country and style preferences.
 
 The Firestore adapter demonstrates the intended storage boundary. Read-modify-write operations on looks currently require sequential requests; the UI serializes actions. Add Firestore transactions or revision-based optimistic concurrency before multiple clients edit the same look. Profile changes apply to the next analysis/agent invocation; existing reports remain snapshots.
 

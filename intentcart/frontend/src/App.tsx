@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { NavLink, Route, Routes, Link } from 'react-router-dom'
 import { ShoppingBag, ScanLine, Shirt, UserRound, ArrowUpRight } from 'lucide-react'
 import { onAuthStateChanged } from 'firebase/auth'
@@ -12,6 +12,10 @@ import { LookBoard } from './pages/LookBoard'
 import { Profile } from './pages/Profile'
 import { ErrorMessage } from './components/Feedback'
 
+const ShopLook = lazy(() =>
+  import('./pages/ShopLook').then((module) => ({ default: module.ShopLook })),
+)
+
 export default function App() {
   const cache = useQueryClient()
   const [uid, setUid] = useState<string | null>(auth ? null : 'demo')
@@ -19,7 +23,8 @@ export default function App() {
   const [authError, setAuthError] = useState<unknown>()
   const health = useQuery({
     queryKey: ['health'],
-    queryFn: () => api<{ agent_mode: string; auth_mode: string }>('/health'),
+    queryFn: () =>
+      api<{ agent_mode: string; stylist_agent_mode: string; auth_mode: string }>('/health'),
     retry: 1,
   })
   useEffect(() => {
@@ -61,9 +66,11 @@ export default function App() {
         {health.isError
           ? 'API unavailable · Start the backend on port 8000'
           : health.data
-            ? health.data.agent_mode === 'demo'
-              ? 'Local demo · Sample data and placeholder AI responses'
-              : 'Gemini mode · Prompts and integrations require configuration'
+            ? health.data.stylist_agent_mode === 'gemini'
+              ? 'Shop a look · Gemini with Google Search'
+              : health.data.agent_mode === 'demo'
+                ? 'Local demo · Sample data and placeholder AI responses'
+                : 'Gemini mode · Prompts and integrations require configuration'
             : 'Connecting to your companion…'}
         {auth && (
           <button
@@ -97,7 +104,15 @@ export default function App() {
           <Routes key={uid}>
             <Route path="/" element={<Home />} />
             <Route path="/food" element={<FoodCheck />} />
-            <Route path="/clothes" element={<LookBoard />} />
+            <Route
+              path="/clothes"
+              element={
+                <Suspense fallback={<p>Loading your stylist…</p>}>
+                  <ShopLook />
+                </Suspense>
+              }
+            />
+            <Route path="/clothes/board" element={<LookBoard />} />
             <Route path="/profile" element={<Profile />} />
             <Route
               path="*"

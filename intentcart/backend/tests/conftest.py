@@ -13,6 +13,7 @@ def client():
         agent_mode="demo",
         auth_mode="demo",
         store_backend="memory",
+        agent_session_backend="memory",
         enable_open_food_facts=False,
     )
     with TestClient(create_app(settings)) as test_client:
