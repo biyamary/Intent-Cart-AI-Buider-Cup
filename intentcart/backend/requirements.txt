@@ -1,0 +1,2 @@
+# Dependency declarations are in pyproject.toml. uv.lock pins the full environment.
+-e .

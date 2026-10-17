@@ -1,0 +1,16 @@
+[
+  {"id":"outfit-1","category":"outfit","title":"Sage cotton kurta set","price_minor":180000,"colour":"sage"},
+  {"id":"outfit-2","category":"outfit","title":"Marigold festive set","price_minor":280000,"colour":"marigold"},
+  {"id":"earrings-1","category":"earrings","title":"Small gold-tone hoops","price_minor":25000,"colour":"gold"},
+  {"id":"earrings-2","category":"earrings","title":"Pearl drop earrings","price_minor":45000,"colour":"ivory"},
+  {"id":"necklace-1","category":"necklace","title":"Fine layered necklace","price_minor":35000,"colour":"gold"},
+  {"id":"necklace-2","category":"necklace","title":"Minimal pearl strand","price_minor":55000,"colour":"ivory"},
+  {"id":"bangles-1","category":"bangles","title":"Slim bangle pair","price_minor":20000,"colour":"gold"},
+  {"id":"bangles-2","category":"bangles","title":"Textured cuff","price_minor":35000,"colour":"gold"},
+  {"id":"footwear-1","category":"footwear","title":"Everyday woven flats","price_minor":65000,"colour":"tan"},
+  {"id":"footwear-2","category":"footwear","title":"Embroidered juttis","price_minor":95000,"colour":"ivory"},
+  {"id":"handbag-1","category":"handbag","title":"Woven mini bag","price_minor":45000,"colour":"tan"},
+  {"id":"handbag-2","category":"handbag","title":"Festive potli bag","price_minor":65000,"colour":"sage"},
+  {"id":"hair-1","category":"hair accessories","title":"Simple floral hair pins","price_minor":10000,"colour":"ivory"},
+  {"id":"hair-2","category":"hair accessories","title":"Pearl hair clip","price_minor":18000,"colour":"ivory"}
+]

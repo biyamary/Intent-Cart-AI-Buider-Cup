@@ -1,0 +1,80 @@
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.agents.runtime import AgentRuntime
+from app.config import Settings, get_settings
+from app.memory.store import FirestoreStore, MemoryStore
+from app.routers import clothes, food, profile
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if settings.auth_mode == "firebase":
+            import firebase_admin
+
+            try:
+                firebase_admin.get_app()
+            except ValueError:
+                firebase_admin.initialize_app(options={"projectId": settings.google_cloud_project})
+        if settings.agent_mode == "gemini":
+            os.environ["GOOGLE_API_KEY"] = settings.google_api_key.get_secret_value()
+        yield
+
+    app = FastAPI(title="IntentCart API", version="0.1.0", lifespan=lifespan)
+    app.state.settings = settings
+    app.state.store = (
+        FirestoreStore(settings.google_cloud_project)
+        if settings.store_backend == "firestore"
+        else MemoryStore()
+    )
+    app.state.agents = AgentRuntime(settings)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+    @app.get("/api/health", tags=["system"])
+    async def health():
+        return {
+            "status": "ok",
+            "agent_mode": settings.agent_mode,
+            "auth_mode": settings.auth_mode,
+            "store": settings.store_backend,
+        }
+
+    for router in (profile.router, food.router, clothes.router):
+        app.include_router(router, prefix="/api")
+
+    dist = settings.frontend_dist.resolve()
+    if (dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def frontend(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "API route not found.")
+        target = (dist / path).resolve()
+        if not target.is_relative_to(dist):
+            raise HTTPException(404, "File not found.")
+        if target.is_file():
+            return FileResponse(target)
+        if "." in path.rsplit("/", 1)[-1]:
+            raise HTTPException(404, "Asset not found.")
+        if (dist / "index.html").is_file():
+            return FileResponse(dist / "index.html")
+        raise HTTPException(404, "Frontend is not built. Run Vite on port 5173 or npm run build.")
+
+    return app
+
+
+app = create_app()

@@ -1,0 +1,1 @@
+"""IntentCart application package."""

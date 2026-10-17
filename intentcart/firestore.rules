@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // FastAPI owns data access through the Admin SDK and a verified Firebase uid.
+    // Browser clients must not bypass the server's confirmation / budget checks.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
