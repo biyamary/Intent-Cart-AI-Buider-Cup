@@ -21,6 +21,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, DatabaseSessionService, InMemorySessionService
 from google.genai import types
 
+from app.agents.base import ANSWER_BY_KEY
 from app.agents.conversation_schemas import (
     AgentInfo,
     ChatRequest,
@@ -458,11 +459,16 @@ class ConversationService:
         stage = "understanding"
         invocation_id = None
         live_key = (agent_id, uid, session_id, request_id)
+        timeout = registration.timeout_seconds(self.settings)
+        # After this moment the agent answers without tools (see answer_on_last_call),
+        # so a turn ends with a reply instead of the timeout. Never less than half the turn.
+        tool_window = max(timeout - registration.answer_reserve_seconds(self.settings), timeout / 2)
+        state_delta = {**state_delta, ANSWER_BY_KEY: time.time() + tool_window}
         await self._record_progress(
             agent_id, uid, session_id, request_id, "running", stage, created_at
         )
         try:
-            async with asyncio.timeout(registration.timeout_seconds(self.settings)):
+            async with asyncio.timeout(timeout):
                 has_answer = False
                 async for event in runner.run_async(
                     user_id=uid,

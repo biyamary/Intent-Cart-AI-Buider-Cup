@@ -1,17 +1,22 @@
 import asyncio
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from google.adk.agents.run_config import RunConfig
+from google.adk.events import Event
 from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.genai import types
 from google.genai.errors import ClientError
 from pydantic import PrivateAttr
 
+from app.agents.base import ANSWER_BY_KEY, FINAL_CALL_NOTE, TimedAgentTool, answer_on_last_call
 from app.agents.conversation_schemas import ChatRequest
 from app.agents.conversations import ConversationService
 from app.auth import current_user
@@ -370,6 +375,140 @@ def test_food_answers_from_gathered_evidence_when_its_step_budget_runs_out():
             if part.function_response
         ]
         assert len(responses) == 3
+
+
+def guard_inputs(seconds_left, calls_made, limit=10):
+    request = LlmRequest(
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(function_declarations=[types.FunctionDeclaration(name="lookup")])]
+        )
+    )
+    model_turn = types.Content(role="model", parts=[types.Part(text="step")])
+    context = SimpleNamespace(
+        state={} if seconds_left is None else {ANSWER_BY_KEY: time.time() + seconds_left},
+        run_config=RunConfig(max_llm_calls=limit),
+        session=SimpleNamespace(
+            events=[
+                Event(invocation_id="inv", author="food_companion", content=model_turn)
+                for _ in range(calls_made)
+            ]
+        ),
+        invocation_id="inv",
+        agent_name="food_companion",
+    )
+    return context, request
+
+
+@pytest.mark.parametrize(
+    "seconds_left,calls_made,final",
+    [
+        (60, 0, False),  # time and calls left: keep researching
+        (None, 0, False),  # no deadline (e.g. the scanner pipeline)
+        (-1, 0, True),  # out of time: answer now
+        (60, 9, True),  # last allowed model call: answer now
+    ],
+)
+def test_tools_turn_off_when_a_turn_runs_out_of_time_or_calls(seconds_left, calls_made, final):
+    context, request = guard_inputs(seconds_left, calls_made)
+
+    answer_on_last_call(context, request)
+
+    tool_config = request.config.tool_config
+    disabled = (
+        tool_config is not None
+        and tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.NONE
+    )
+    assert disabled is final
+    assert (FINAL_CALL_NOTE in str(request.config.system_instruction or "")) is final
+
+
+class Stalled(BaseLlm):
+    model: str = "gemini-test"
+
+    async def generate_content_async(self, llm_request, stream=False):
+        await asyncio.sleep(30)
+        yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="late")]))
+
+
+class Searcher(BaseLlm):
+    """Searches once, then answers from whatever the search returned."""
+
+    model: str = "gemini-test"
+    _requests: list = PrivateAttr(default_factory=list)
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self._requests.append(llm_request.model_copy(deep=True))
+        if len(self._requests) == 1:
+            call = types.FunctionCall(
+                name="food_google_search", args={"request": "Lay's Cream & Onion India ingredients"}
+            )
+            part = types.Part(function_call=call)
+        else:
+            part = types.Part(text="Potato, oil and a cream & onion seasoning.")
+        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+
+def test_a_stalled_search_is_cut_off_and_the_agent_still_answers():
+    with TestClient(create_app(settings(food_agent_mode="gemini"))) as client:
+        agent = client.app.state.conversations.runner("food").agent
+        search = next(tool for tool in agent.tools if isinstance(tool, TimedAgentTool))
+        search.agent.model = Stalled()
+        search.timeout = 0.2
+        agent.model = model = Searcher()
+        session_id = client.post("/api/agents/food/sessions").json()["id"]
+
+        started = time.monotonic()
+        response = client.post(
+            f"/api/agents/food/sessions/{session_id}/messages",
+            json={"text": "the green flavor", "request_id": str(uuid4())},
+        )
+
+        assert response.status_code == 200, response.text
+        assert time.monotonic() - started < 5
+        assert response.json()["messages"][-1]["text"].startswith("Potato")
+        result = [
+            part.function_response.response
+            for content in model._requests[1].contents
+            for part in content.parts or []
+            if part.function_response
+        ]
+        assert "took too long" in result[0]["error"]
+
+
+@pytest.mark.parametrize(
+    "timeout,search_timeout,window",
+    [
+        (120, 30, 70),  # keep 30s for one more search plus 20s for the answer
+        (60, 30, 30),  # never less than half the turn for research
+    ],
+)
+def test_each_turn_tells_the_agent_when_to_stop_researching(timeout, search_timeout, window):
+    app_settings = settings(
+        food_agent_mode="gemini",
+        food_timeout_seconds=timeout,
+        food_search_timeout_seconds=search_timeout,
+    )
+    with TestClient(create_app(app_settings)) as client:
+        runner = client.app.state.conversations.runner("food")
+        runner.agent.model = FakeGemini()
+        seen = {}
+        run_async = runner.run_async
+
+        def spy(**kwargs):
+            seen.update(kwargs["state_delta"])
+            return run_async(**kwargs)
+
+        runner.run_async = spy
+        session_id = client.post("/api/agents/food/sessions").json()["id"]
+
+        started = time.time()
+        response = client.post(
+            f"/api/agents/food/sessions/{session_id}/messages",
+            json={"text": "Lays ingredients", "request_id": str(uuid4())},
+        )
+
+        assert response.status_code == 200, response.text
+        assert seen[ANSWER_BY_KEY] - started == pytest.approx(window, abs=2)
 
 
 def test_accepted_food_failure_has_one_canonical_error_and_retry_metadata():

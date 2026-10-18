@@ -2,8 +2,9 @@ import json
 
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools import AgentTool, FunctionTool, google_search
+from google.genai import types
 
-from app.agents.base import AgentDefinition, create_agent
+from app.agents.base import AgentDefinition, TimedAgentTool, create_agent
 from app.agents.llm import build_agent
 from app.agents.schemas import Explanation, ExtractedLabel, FollowUp
 from app.config import Settings
@@ -98,15 +99,20 @@ def create_food_chat_agent(settings: Settings):
         )
         return food_context(context) + "\n\n" + capability
 
+    # Chat needs a quick, short answer per search; the scanner pipeline's evidence
+    # search (food_search.md) is far slower and stays separate.
     search = create_agent(
         AgentDefinition(
             "food_google_search",
-            "Search Google for official food regulation, additive safety, E-number, allergen, or ingredient information.",
-            "food_search.md",
+            "Search Google for one specific food question (a product's ingredients, an additive's "
+            "role or rules) and get a short answer with sources.",
+            "food_chat_search.md",
         ),
         model=settings.gemini_model,
         tools=[google_search],
         conversational=True,
+        max_output_tokens=1024,
+        thinking_level=types.ThinkingLevel.LOW,
     )
 
     tools = [
@@ -115,7 +121,7 @@ def create_food_chat_agent(settings: Settings):
         FunctionTool(func=fetch_food_evidence),
     ]
     if settings.food_search_enabled:
-        tools.insert(0, AgentTool(agent=search))
+        tools.insert(0, TimedAgentTool(agent=search, timeout=settings.food_search_timeout_seconds))
 
     return create_agent(
         FOOD_CHAT,

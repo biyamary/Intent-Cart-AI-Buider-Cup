@@ -124,9 +124,17 @@ constraints and grounding propagation in mind when adding tools.
   Look has `STYLIST_TIMEOUT_SECONDS=120`. Errors name the relevant assistant
   instead of always referring to a stylist.
 - Each turn has a model-call budget (`FOOD_MAX_LLM_CALLS=10`,
-  `STYLIST_MAX_LLM_CALLS=12`). The last allowed call runs with function calling
-  disabled, so a turn that spends its budget on research still ends with an
+  `STYLIST_MAX_LLM_CALLS=12`) and a research window: the turn timeout minus a
+  reserve for one more tool call and the answer (food: 20s more than
+  `FOOD_SEARCH_TIMEOUT_SECONDS`; others: 30s; never less than half the turn). Once either runs out, the
+  next model call runs with function calling disabled, so the turn ends with an
   answer built from the evidence it gathered rather than an error.
+- Nia's chat search is a separate, quick agent (`food_chat_search.md`: one focused
+  search, a short sourced answer, low thinking) and each call is cut off after
+  `FOOD_SEARCH_TIMEOUT_SECONDS=30`. The scanner pipeline keeps its slower
+  evidence search. Nia matches research depth to the question: a product's
+  ingredients come first, and the full safety and regulatory review is offered as
+  a follow-up unless asked for or flagged by the user's profile.
 - The blocking compatibility route retains its historical HTTP error response.
   Its clients must render either that response or the refreshed transcript, not
   both. The server never returns raw SDK errors, secrets or internal thoughts.

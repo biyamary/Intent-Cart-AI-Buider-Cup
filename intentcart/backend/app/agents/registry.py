@@ -24,6 +24,9 @@ class AgentRegistration:
     profile_context: Callable[[Profile], dict]
     max_llm_calls: Callable[[Settings], int] = lambda settings: settings.agent_max_llm_calls
     timeout_seconds: Callable[[Settings], int] = lambda settings: settings.agent_timeout_seconds
+    # Time kept back at the end of a turn for one slow tool call plus the final answer.
+    # Past that point the agent answers without tools instead of timing out.
+    answer_reserve_seconds: Callable[[Settings], int] = lambda settings: 30
     accepts_images: bool = False
     default_title: str = "New conversation"
     failure_subject: str = "The assistant"
@@ -80,6 +83,7 @@ AGENTS = {
         },
         max_llm_calls=lambda settings: settings.food_max_llm_calls,
         timeout_seconds=lambda settings: settings.food_timeout_seconds,
+        answer_reserve_seconds=lambda settings: settings.food_search_timeout_seconds + 20,
         default_title="New review",
         failure_subject="The food companion",
     ),
