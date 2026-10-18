@@ -18,7 +18,9 @@ export const categories = [
   'handbag',
   'hair accessories',
 ] as const
-export type Category = (typeof categories)[number]
+export type KnownCategory = (typeof categories)[number]
+// Stylist looks may add custom items such as 'dupatta'.
+export type Category = string
 export interface Profile {
   country: Country
   food_countries?: Country[]
@@ -95,6 +97,8 @@ export interface Scan {
   report: FoodReport | null
   created_at: string
 }
+export type SellerLabel =
+  'verified_small_business' | 'independent' | 'marketplace' | 'brand' | 'unknown'
 export interface Product {
   id: string
   category: Category
@@ -105,10 +109,25 @@ export interface Product {
   url: string | null
   image_url: string | null
   colour: string
-  source: 'seed' | 'live'
+  source: 'seed' | 'live' | 'user'
   price_fetched_at: string | null
   match_reason: string
+  price_source?: 'catalog' | 'page' | 'user'
+  verification?: 'seed' | 'json_ld' | 'shopify' | 'open_graph' | 'user'
+  availability?: 'in_stock' | 'out_of_stock' | 'unknown'
+  rating?: number | null
+  rating_count?: number | null
+  seller_label?: SellerLabel
+  seller_note?: string
+  style_score?: number | null
 }
+export interface Boutique {
+  name: string
+  url: string | null
+  note: string
+  kind: 'local' | 'online'
+}
+export type DiscoveryStatus = 'idle' | 'searching' | 'ready' | 'no_results' | 'failed'
 export interface ChecklistItem {
   id: string
   category: Category
@@ -116,6 +135,32 @@ export interface ChecklistItem {
   budget_cap_minor: number
   chosen_product: Product | null
   candidates: Product[]
+  target?: string
+  hints?: string[]
+  discovery?: DiscoveryStatus
+  discovery_note?: string
+  boutiques?: Boutique[]
+}
+export interface InspirationItem {
+  id: string
+  kind: 'pinterest' | 'web'
+  url: string
+  title: string
+  image_url: string | null
+  source: string
+}
+export interface ConceptImage {
+  id: string
+  artifact: string
+  kind: 'concept' | 'reference_edit' | 'final'
+  caption: string
+  created_at: string
+}
+export interface LookAnalysis {
+  summary: string
+  occasion: string
+  palette: string[]
+  style_tags: string[]
 }
 export interface Look {
   id: string
@@ -125,6 +170,13 @@ export interface Look {
     total_budget_minor: number
     currency: string
     event_date: string | null
+    sizes?: string
+    colours?: string[]
+    avoid_colours?: string[]
+    platforms?: string[]
+    delivery_city?: string
+    delivery_pin?: string
+    small_business?: 'off' | 'prefer' | 'only'
   }
   status: 'awaiting_checklist' | 'shopping' | 'assembled'
   items: ChecklistItem[]
@@ -132,6 +184,13 @@ export interface Look {
   remaining_budget_minor: number
   styling_note: string
   created_at: string
+  mode?: 'board' | 'agent'
+  session_id?: string | null
+  analysis?: LookAnalysis | null
+  references?: string[]
+  inspiration?: InspirationItem[]
+  concepts?: ConceptImage[]
+  revision?: number
 }
 export const money = (minor: number) =>
   new Intl.NumberFormat('en-IN', {

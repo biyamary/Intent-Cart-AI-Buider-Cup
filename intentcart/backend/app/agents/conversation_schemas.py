@@ -1,8 +1,7 @@
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import Field, StringConstraints
-from typing_extensions import Annotated
 
 from app.schemas import Contract
 
@@ -14,9 +13,17 @@ class AgentInfo(Contract):
     capabilities: list[str] = Field(default_factory=list)
 
 
+AttachmentName = Annotated[str, StringConstraints(pattern=r"^ref-[0-9a-f]{12}\.(jpg|png|webp)$")]
+
+
 class ChatRequest(Contract):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
     request_id: UUID
+    attachments: list[AttachmentName] = Field(default_factory=list, max_length=3)
+
+
+class Attachment(Contract):
+    name: str
 
 
 class Source(Contract):
@@ -39,6 +46,7 @@ class ChatMessage(Contract):
     citations: list[Citation] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)
     search_entry_point: str | None = None
+    attachments: list[str] = Field(default_factory=list)
 
 
 class ConversationSummary(Contract):
@@ -50,3 +58,4 @@ class ConversationSummary(Contract):
 
 class Conversation(ConversationSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
+    look_id: str | None = None

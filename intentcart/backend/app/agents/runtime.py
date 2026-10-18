@@ -11,9 +11,11 @@ from google.genai import types
 from pydantic import BaseModel
 
 from app.agents.errors import StructuredResponseError, describe_step_error, ensure_complete_response
+from app.agents.privacy import adk_app, install_log_redaction, is_node_failure
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+install_log_redaction()
 
 
 class AgentRuntime:
@@ -43,7 +45,7 @@ class AgentRuntime:
             )
         session_service = InMemorySessionService()
         app_name, session_id = "intentcart", uuid4().hex
-        runner = Runner(agent=agent, app_name=app_name, session_service=session_service)
+        runner = Runner(app=adk_app(app_name, agent), session_service=session_service)
         await session_service.create_session(app_name=app_name, user_id=uid, session_id=session_id)
         parts = [types.Part.from_text(text=json.dumps(payload))]
         if image is not None:
@@ -57,7 +59,9 @@ class AgentRuntime:
                     new_message=types.Content(role="user", parts=parts),
                     run_config=RunConfig(max_llm_calls=self.settings.agent_max_llm_calls),
                 ):
-                    if event.author == agent.name:
+                    # ADK 2 reports a raised exception as an error event first; let the
+                    # exception itself propagate so it is classified accurately.
+                    if event.author == agent.name and not is_node_failure(event):
                         ensure_complete_response(event)
                     if event.author == agent.name and event.is_final_response() and event.content:
                         final_text = "".join(

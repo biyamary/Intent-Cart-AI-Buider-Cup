@@ -14,6 +14,7 @@ export interface ChatMessage {
   citations: { text: string; source_indices: number[] }[]
   search_queries: string[]
   search_entry_point: string | null
+  attachments?: string[]
 }
 export interface ConversationSummary {
   id: string
@@ -23,6 +24,7 @@ export interface ConversationSummary {
 }
 export interface Conversation extends ConversationSummary {
   messages: ChatMessage[]
+  look_id?: string | null
 }
 export function safeWebUrl(value: string | undefined) {
   try {

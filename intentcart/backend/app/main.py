@@ -5,10 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.agents.conversations import ConversationService, create_session_service
+from app.agents.conversations import (
+    ConversationService,
+    create_artifact_service,
+    create_session_service,
+)
 from app.agents.food_pipeline import FoodPipeline
 from app.agents.google_client import configure_adk_environment
 from app.agents.runtime import AgentRuntime
+from app.clothes.discovery import Discovery
+from app.clothes.service import LookService
+from app.clothes.studio import Studio
+from app.clothes.tools import ShopServices
 from app.config import Settings, get_settings
 from app.memory.store import FirestoreStore, MemoryStore
 from app.routers import agents, clothes, food, profile
@@ -28,10 +36,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 firebase_admin.initialize_app(options={"projectId": settings.google_cloud_project})
         if "gemini" in (settings.agent_mode, settings.stylist_mode, settings.food_mode):
             configure_adk_environment(settings)
-        app.state.conversations = ConversationService(settings, create_session_service(settings))
+        app.state.conversations = ConversationService(
+            settings,
+            create_session_service(settings),
+            create_artifact_service(settings),
+            ShopServices(settings, app.state.looks, app.state.discovery, app.state.studio),
+        )
         try:
             yield
         finally:
+            await app.state.discovery.close()
             await app.state.conversations.close()
 
     app = FastAPI(title="IntentCart API", version="0.1.0", lifespan=lifespan)
@@ -42,6 +56,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else MemoryStore()
     )
     app.state.agents = AgentRuntime(settings)
+    app.state.looks = LookService(app.state.store)
+    app.state.discovery = Discovery(settings, app.state.looks)
+    app.state.studio = Studio(settings)
     app.state.food_pipeline = FoodPipeline(settings, app.state.store, app.state.agents)
     app.add_middleware(
         CORSMiddleware,

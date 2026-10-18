@@ -9,6 +9,12 @@ WEIGHTS = {
     "bangles": 6,
     "hair accessories": 4,
 }
+# User-added categories (e.g. "dupatta", "clutch") share budget like a small accessory.
+DEFAULT_WEIGHT = 6
+
+
+def weight(category: str) -> int:
+    return WEIGHTS.get(category, DEFAULT_WEIGHT)
 
 
 def allocate_budget(look: Look) -> Look:
@@ -22,7 +28,7 @@ def allocate_budget(look: Look) -> Look:
     if remaining < 0:
         raise ValueError("Selected products exceed the total budget.")
     open_items = [item for item in look.items if item.status == "open"]
-    weight_sum = sum(WEIGHTS[item.category] for item in open_items)
+    weight_sum = sum(weight(item.category) for item in open_items)
     for item in look.items:
         item.budget_cap_minor = (
             item.chosen_product.price_minor
@@ -31,11 +37,11 @@ def allocate_budget(look: Look) -> Look:
         )
     if weight_sum:
         for item in open_items:
-            item.budget_cap_minor = remaining * WEIGHTS[item.category] // weight_sum
+            item.budget_cap_minor = remaining * weight(item.category) // weight_sum
         spare = remaining - sum(item.budget_cap_minor for item in open_items)
         ranked = sorted(
             open_items,
-            key=lambda item: remaining * WEIGHTS[item.category] % weight_sum,
+            key=lambda item: remaining * weight(item.category) % weight_sum,
             reverse=True,
         )
         for item in ranked[:spare]:
