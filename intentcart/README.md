@@ -57,6 +57,26 @@ See [Shop a Look](docs/shop-a-look.md) and [conversational agents](docs/agents.m
 
 Keep `STYLIST_SEARCH_ENABLED=false` for conversational styling without browsing. To enable Google Search later, choose a compatible model/project with available grounding quota, set `STYLIST_SEARCH_ENABLED=true`, and restart the backend.
 
+## Sign-in (static accounts)
+
+`AUTH_MODE=static` enables two fixed accounts, John and Jane. The landing page stays public. Chatting with Nia or Mira, the sample board and My profile require sign-in, and a signed-out visitor is redirected to `/login` and then returned to the page they asked for.
+
+```powershell
+cd backend
+uv run python scripts/hash_password.py john jane
+```
+
+The script prompts for each password (12+ characters, not echoed) and prints `AUTH_MODE`, `STATIC_USERS` and a random `AUTH_SECRET_KEY`. Put these lines in `backend/.env`, or in your deployment's secret environment, and restart the API. No frontend setting is needed.
+
+- Passwords are checked only by the API, against salted scrypt hashes. Neither the passwords nor the hashes reach the browser bundle.
+- A successful sign-in sets an HMAC-signed, expiring cookie (`HttpOnly`, `SameSite=Strict`, path `/api`, and `Secure` when `APP_ENV=production`). Page scripts cannot read it, and editing it invalidates it.
+- Every API route still checks the cookie on the server, so calling the API directly without signing in returns `401`.
+- After 5 failed attempts in 15 minutes, an account is locked for the rest of that window.
+- Changing a user's password hash, or rotating `AUTH_SECRET_KEY`, signs that user (or everyone) out.
+- Static auth needs the frontend and API on the same origin. That is the default for the Vite proxy and the single-container deployment.
+
+**Delete all chats:** My profile → *Delete all chats* permanently removes the signed-in user's Nia and Mira conversations, their attached and generated images, and Mira's linked look boards (`DELETE /api/agents/sessions`). The rows are deleted from the session database rather than hidden. The `.data` directory is excluded from the Docker image, so a redeploy cannot restore them.
+
 ## Try the flows
 
 **Nia / Food Guide:** open Food and start a chat with a question or pasted ingredient label. While Nia works, the conversation shows safe stages such as understanding, checking trusted sources, and preparing the answer. The structured scanner remains available for text, barcode, and photo input. Save `milk, peanut` as allergies in My profile to validate personalized warnings. Set `FOOD_AGENT_MODE=gemini` for live conversation and `AGENT_MODE=gemini` for structured gap research. See [food agent setup and evidence limits](docs/food-agent.md).
@@ -80,7 +100,7 @@ Prices are integer paise in the API; ₹6,000 is `600000`. The backend recompute
 | Food evidence | Reviewed regulation/IARC seeds, country matrix, hard-allowlisted fetch, Google Search via AgentTool, citation checks and expiring Firestore/memory evidence cache. Missing evidence remains unverified |
 | Clothes | Checklist confirmation; market-informed complete-basket planning; automatic redistribution; 14 illustrative seed products; lock/swap/owned/remove; whole-look refinement and final totals |
 | Clothes discovery | ADK 2 workflow per checklist item: Google Search nominates pages; prices/images/stock are verified from product pages; category ranges and reserved options inform the plan; ranking considers fit, preferred platforms, and a popular-retailer-first policy. Verified small businesses remain distinctly labelled. Reference-image analysis/editing, Pinterest inspiration, Maps boutiques |
-| Auth / memory | Working local adapter; Firebase token verification, Google sign-in, and Firestore adapters included but not cloud-tested |
+| Auth / memory | Working local adapter; static John/Jane accounts with signed HttpOnly cookies; Firebase token verification, Google sign-in, and Firestore adapters included but not cloud-tested |
 | PWA / container | App-shell PWA configuration, manifest and icon; multi-stage Dockerfile for one Cloud Run service |
 | Deferred | SSE transport (the UI currently polls), a distributed production turn queue/shared lease for multiple API workers, cloud image history, checkout, price tracking, furniture and accessories |
 
@@ -94,7 +114,7 @@ intentcart/
     app/
       main.py                 # App factory, routing, static frontend serving
       config.py               # Environment settings and mode validation
-      auth.py                 # Demo identity / Firebase token verification
+      auth.py                 # Demo identity / static sign-in cookies / Firebase tokens
       schemas.py              # API contracts and persisted records
       routers/                # profile, food, clothes
       agents/

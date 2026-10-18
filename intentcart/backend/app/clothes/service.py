@@ -131,6 +131,18 @@ class LookService:
         ]
         return max(matches, key=lambda look: look.updated_at) if matches else None
 
+    async def delete_for_sessions(self, uid: str, session_ids: set[str]) -> int:
+        """Permanently delete agent looks that belong to the given conversations."""
+        doomed = [
+            look
+            for look in await self.list_looks(uid)
+            if look.mode == "agent" and look.session_id in session_ids
+        ]
+        for look in doomed:
+            async with self._locks[look.id]:
+                await self.store.delete(uid, "looks", look.id)
+            self._locks.pop(look.id, None)
+        return len(doomed)
 
     async def save(self, uid: str, look: Look) -> Look:
         look.revision += 1

@@ -563,3 +563,86 @@ def test_turn_limit_and_concurrent_requests():
 
     asyncio.run(check())
 
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def test_delete_all_removes_only_the_users_chats_images_and_looks(chat_client):
+    from app.schemas import LookBrief
+
+    client, _ = chat_client
+    app = client.app
+    service = app.state.conversations
+    looks = app.state.looks
+    session_id = new_session(client)
+    assert send(client, session_id, "Mehendi outfit").status_code == 200
+    upload = client.post(
+        f"/api/agents/stylist/sessions/{session_id}/attachments",
+        files={"image": ("ref.png", PNG, "image/png")},
+    )
+    assert upload.status_code == 201, upload.text
+    brief = LookBrief(occasion="Mehendi", total_budget_minor=600000)
+    look = asyncio.run(looks.create_for_session("local-demo-user", session_id, brief))
+    board = asyncio.run(looks.create("local-demo-user", look.model_copy(update={"id": "sample-board", "mode": "board"})))
+
+    client.app.dependency_overrides[current_user] = lambda: "another-user"
+    other_id = new_session(client)
+    client.app.dependency_overrides.pop(current_user)
+
+    response = client.delete("/api/agents/sessions")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"conversations": 1, "looks": 1}
+    assert client.get("/api/agents/stylist/sessions").json() == []
+    assert client.get(f"/api/agents/stylist/sessions/{session_id}").status_code == 404
+    assert asyncio.run(
+        service.artifacts.list_artifact_keys(
+            app_name="intentcart_stylist", user_id="local-demo-user", session_id=session_id
+        )
+    ) == []
+    remaining = asyncio.run(looks.list_looks("local-demo-user"))
+    assert [item.id for item in remaining] == [board.id]  # sample boards are not chats
+    assert client.delete("/api/agents/sessions").json() == {"conversations": 0, "looks": 0}
+
+    client.app.dependency_overrides[current_user] = lambda: "another-user"
+    assert [s["id"] for s in client.get("/api/agents/stylist/sessions").json()] == [other_id]
+
+
+def test_delete_all_cancels_a_running_turn(chat_client):
+    client, _ = chat_client
+    slow = SlowGemini()
+    slow._delay = 5
+    client.app.state.conversations.runner("stylist").agent.model = slow
+    session_id = new_session(client)
+    accepted = client.post(
+        f"/api/agents/stylist/sessions/{session_id}/turns",
+        json={"text": "Mehendi outfit", "request_id": str(uuid4())},
+    )
+    assert accepted.status_code == 202
+    started = time.monotonic()
+    assert client.delete("/api/agents/sessions").json()["conversations"] == 1
+    assert time.monotonic() - started < 3
+    assert client.get("/api/agents/stylist/sessions").json() == []
+
+
+def test_deleted_sqlite_history_stays_deleted_after_restart(tmp_path):
+    async def check():
+        url = f"sqlite+aiosqlite:///{(tmp_path / 'sessions.db').as_posix()}"
+        service = ConversationService(settings(), DatabaseSessionService(url))
+        service.runner("stylist").agent.model = FakeGemini()
+        mine = await service.create("stylist", "user-a")
+        await service.send(
+            "stylist", "user-a", mine.id, ChatRequest(text="Mehendi", request_id=uuid4()), Profile()
+        )
+        theirs = await service.create("stylist", "user-b")
+        assert (await service.delete_all("user-a")).conversations == 1
+        await service.close()
+        fresh = ConversationService(settings(), DatabaseSessionService(url))
+        try:
+            assert await fresh.list("stylist", "user-a") == []
+            assert [s.id for s in await fresh.list("stylist", "user-b")] == [theirs.id]
+            with pytest.raises(HTTPException):
+                await fresh.get("stylist", "user-a", mine.id)
+        finally:
+            await fresh.close()
+
+    asyncio.run(check())

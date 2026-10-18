@@ -26,6 +26,7 @@ from app.agents.conversation_schemas import (
     ChatRequest,
     Conversation,
     ConversationSummary,
+    DeletedConversations,
     RetryAdvice,
     TurnError,
     TurnProgress,
@@ -642,6 +643,41 @@ class ConversationService:
         finally:
             self._live.pop((*session_key, request_id), None)
             self._active.discard(session_key)
+
+    async def delete_all(self, uid: str) -> DeletedConversations:
+        """Permanently delete every conversation of `uid` with its images and looks."""
+        # Stop this user's background turns first so none writes to a deleted session.
+        tasks = [task for key, task in self._tasks.items() if key[1] == uid]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if any(key[1] == uid for key in self._active):
+            raise HTTPException(
+                409, "A reply is still in progress. Try again when it finishes."
+            )
+        deleted: set[str] = set()
+        for registration in AGENTS.values():
+            app_name = registration.app_name
+            listed = await self.sessions.list_sessions(app_name=app_name, user_id=uid)
+            for session in listed.sessions:
+                names = await self.artifacts.list_artifact_keys(
+                    app_name=app_name, user_id=uid, session_id=session.id
+                )
+                for name in names:
+                    if not name.startswith("user:"):
+                        await self.artifacts.delete_artifact(
+                            app_name=app_name, user_id=uid, session_id=session.id, filename=name
+                        )
+                await self.sessions.delete_session(
+                    app_name=app_name, user_id=uid, session_id=session.id
+                )
+                deleted.add(session.id)
+        looks = 0
+        if self.services is not None:
+            looks = await self.services.looks.delete_for_sessions(uid, deleted)
+        logger.info("Deleted conversations: count=%s looks=%s", len(deleted), looks)
+        return DeletedConversations(conversations=len(deleted), looks=looks)
 
     async def save_attachment(
         self, agent_id: str, uid: str, session_id: str, data: bytes, mime: str

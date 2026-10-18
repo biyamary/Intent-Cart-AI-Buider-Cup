@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.passwords import valid_password_hash, valid_username
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -39,7 +41,15 @@ class Settings(BaseSettings):
     agent_session_db_path: Path = BACKEND_DIR / ".data" / "agent_sessions.db"
     agent_max_llm_calls: int = Field(default=6, ge=1, le=20)
     agent_max_conversation_turns: int = Field(default=40, ge=1, le=100)
-    auth_mode: Literal["demo", "firebase"] = "demo"
+    auth_mode: Literal["demo", "static", "firebase"] = "demo"
+    # AUTH_MODE=static: username -> scrypt hash from scripts/hash_password.py.
+    # Passwords are verified only on the server; the browser never sees them.
+    static_users: dict[str, str] = {}
+    # Signs static-mode session cookies. Rotating it signs every user out.
+    auth_secret_key: SecretStr = SecretStr("")
+    auth_session_hours: int = Field(default=12, ge=1, le=168)
+    # None: Secure cookies in production only (local HTTP development needs them off).
+    auth_cookie_secure: bool | None = None
     store_backend: Literal["memory", "firestore"] = "memory"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     google_api_key: SecretStr = SecretStr("")
@@ -58,7 +68,18 @@ class Settings(BaseSettings):
         if self.app_env == "production" and (
             self.auth_mode == "demo" or self.store_backend == "memory"
         ):
-            raise ValueError("Production requires Firebase auth and Firestore storage.")
+            raise ValueError("Production requires static or Firebase auth and Firestore storage.")
+        if self.auth_mode == "static":
+            if len(self.auth_secret_key.get_secret_value()) < 32:
+                raise ValueError("AUTH_MODE=static requires an AUTH_SECRET_KEY of 32+ characters.")
+            if not self.static_users:
+                raise ValueError("AUTH_MODE=static requires STATIC_USERS.")
+            for username, password_hash in self.static_users.items():
+                if not valid_username(username) or not valid_password_hash(password_hash):
+                    raise ValueError(
+                        "STATIC_USERS needs lowercase usernames and hashes from "
+                        "scripts/hash_password.py."
+                    )
         if "gemini" in (self.agent_mode, self.stylist_agent_mode, self.food_agent_mode):
             if self.google_genai_use_vertexai:
                 if not self.google_cloud_project.strip() or not self.google_cloud_location.strip():
@@ -76,6 +97,12 @@ class Settings(BaseSettings):
         if self.enable_open_food_facts and "replace-with" in self.open_food_facts_user_agent:
             raise ValueError("Set an identifying OPEN_FOOD_FACTS_USER_AGENT first.")
         return self
+
+    @property
+    def secure_cookies(self) -> bool:
+        if self.auth_cookie_secure is not None:
+            return self.auth_cookie_secure
+        return self.app_env == "production"
 
     @property
     def stylist_mode(self) -> Literal["demo", "gemini"]:

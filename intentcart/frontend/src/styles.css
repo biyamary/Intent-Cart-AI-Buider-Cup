@@ -179,6 +179,54 @@ strong {
   font-size: 12px;
   min-height: 44px;
 }
+.account {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.account-action,
+.text-button.account-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 12px;
+  color: #4f6b43;
+  align-self: center;
+}
+.login-page {
+  display: grid;
+  place-items: center;
+  padding: 24px 0 48px;
+}
+.login-panel {
+  width: min(100%, 420px);
+}
+.danger-zone {
+  margin-top: 25px;
+  border-color: #f0d2cb;
+}
+.danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+button.danger {
+  background: #a33a35;
+  border-color: #a33a35;
+}
+button.danger:hover {
+  background: #8d302d;
+}
+button.danger-outline {
+  align-self: flex-start;
+  background: #fff;
+  color: #a33a35;
+  border-color: #e3b7ae;
+}
+button.danger-outline:hover {
+  background: #fff0ed;
+}
 .app-mode {
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -1129,6 +1177,9 @@ hr {
   }
   .profile-link span {
     display: none;
+  }
+  .account {
+    gap: 10px;
   }
   .app-mode {
     font-size: 9px;

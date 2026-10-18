@@ -8,6 +8,7 @@ from app.agents.conversation_schemas import (
     ChatRequest,
     Conversation,
     ConversationSummary,
+    DeletedConversations,
     TurnStatus,
 )
 from app.agents.conversations import ConversationService
@@ -27,6 +28,14 @@ async def list_agents(
     uid: str = Depends(current_user), service: ConversationService = Depends(conversations)
 ):
     return service.available_agents()
+
+
+@router.delete("/sessions", response_model=DeletedConversations)
+async def delete_all_conversations(
+    uid: str = Depends(current_user), service: ConversationService = Depends(conversations)
+):
+    """Permanently delete all of the user's Nia and Mira conversations."""
+    return await service.delete_all(uid)
 
 
 @router.post("/{agent_id}/sessions", response_model=Conversation, status_code=201)

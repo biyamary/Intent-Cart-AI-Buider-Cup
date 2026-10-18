@@ -101,6 +101,11 @@ class ConversationSummary(Contract):
     updated_at: float
 
 
+class DeletedConversations(Contract):
+    conversations: int
+    looks: int
+
+
 class Conversation(ConversationSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     look_id: str | None = None

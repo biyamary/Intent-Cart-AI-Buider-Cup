@@ -7,6 +7,7 @@ class Store(Protocol):
     async def get(self, uid: str, collection: str, key: str) -> dict | None: ...
     async def put(self, uid: str, collection: str, key: str, value: dict) -> None: ...
     async def list(self, uid: str, collection: str) -> list[dict]: ...
+    async def delete(self, uid: str, collection: str, key: str) -> None: ...
     async def get_evidence(self, key: str) -> dict | None: ...
     async def put_evidence(self, key: str, value: dict) -> None: ...
 
@@ -32,6 +33,9 @@ class MemoryStore:
 
     async def list(self, uid, collection):
         return deepcopy([v for (u, c, _), v in self._data.items() if (u, c) == (uid, collection)])
+
+    async def delete(self, uid, collection, key):
+        self._data.pop((uid, collection, key), None)
 
 
 class FirestoreStore:
@@ -65,3 +69,6 @@ class FirestoreStore:
     async def list(self, uid, collection):
         ref = self.client.collection("users").document(uid).collection(collection)
         return await asyncio.to_thread(lambda: [snap.to_dict() for snap in ref.stream()])
+
+    async def delete(self, uid, collection, key):
+        await asyncio.to_thread(self._ref(uid, collection, key).delete)
