@@ -29,7 +29,14 @@ export function AgentMessage({
       {fromUser ? (
         <p className="user-message-text">{message.text}</p>
       ) : message.status === 'error' ? (
-        <div className="notice error">{message.text}</div>
+        <div className="notice error">
+          <span>{message.text}</span>
+          {message.error?.diagnostic_id && (
+            <small className="error-reference">
+              Support reference: {message.error.diagnostic_id}
+            </small>
+          )}
+        </div>
       ) : (
         <>
           <div className="agent-markdown">

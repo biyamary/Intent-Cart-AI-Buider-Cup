@@ -1,8 +1,10 @@
 import httpx
 import pytest
-from google.genai.errors import ClientError
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
+from google.auth.exceptions import TransportError as GoogleTransportError
+from google.genai.errors import ClientError, ServerError
 
-from app.agents.errors import describe_agent_error
+from app.agents.errors import StructuredResponseError, describe_agent_error
 
 
 def quota_error(*, quota_id="GenerateRequestsPerMinutePerProjectPerModel-FreeTier", value=None):
@@ -107,3 +109,41 @@ def test_conversation_failure_uses_supplied_agent_name_without_internal_detail()
     assert failure.retryable is True
     assert failure.detail.startswith("The food companion took too long")
     assert "private" not in failure.detail
+
+
+@pytest.mark.parametrize(
+    "error,reason,status",
+    [
+        (
+            ServerError(503, {"error": {"message": "private-provider-payload"}}),
+            "provider_unavailable",
+            503,
+        ),
+        (httpx.ConnectError("private endpoint"), "provider_connection", 502),
+        (GoogleTransportError("private credentials path"), "provider_connection", 502),
+        (StructuredResponseError("empty_response"), "empty_response", 502),
+    ],
+)
+def test_transient_conversation_failures_are_specific_and_redacted(error, reason, status):
+    failure = describe_agent_error(error, "The stylist")
+    assert failure.reason == reason
+    assert failure.status == status
+    assert failure.retryable is True
+    assert "private" not in repr(failure)
+
+
+def test_step_limit_failure_suggests_a_narrower_question():
+    failure = describe_agent_error(
+        LlmCallsLimitExceededError("Max number of llm calls limit of `6` exceeded"),
+        "The food companion",
+    )
+    assert failure.reason == "step_limit"
+    assert failure.detail.startswith("The food companion needed more steps")
+    assert "llm calls" not in failure.detail
+
+
+def test_provider_retry_after_is_preserved_for_service_failure():
+    response = httpx.Response(503, headers={"Retry-After": "7"})
+    failure = describe_agent_error(ServerError(503, {}, response=response))
+    assert failure.reason == "provider_unavailable"
+    assert failure.retry_after == 7

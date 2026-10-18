@@ -133,9 +133,7 @@ def send(client, session_id, text, request_id=None):
 def wait_for_turn(client, agent_id, session_id, request_id, timeout=2):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = client.get(
-            f"/api/agents/{agent_id}/sessions/{session_id}/turns/{request_id}"
-        )
+        response = client.get(f"/api/agents/{agent_id}/sessions/{session_id}/turns/{request_id}")
         assert response.status_code == 200, response.text
         turn = response.json()
         if turn["status"] in {"succeeded", "failed"}:
@@ -321,6 +319,59 @@ def test_accepted_turn_can_be_polled_and_replayed_without_duplicate_call(chat_cl
     assert "Private model reasoning" not in str(conversation) + str(turn)
 
 
+class Researcher(BaseLlm):
+    """Always wants one more lookup, like the live food agent on a broad question."""
+
+    model: str = "gemini-test"
+    _requests: list = PrivateAttr(default_factory=list)
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self._requests.append(llm_request.model_copy(deep=True))
+        config = llm_request.config.tool_config
+        if config and config.function_calling_config.mode == types.FunctionCallingConfigMode.NONE:
+            yield LlmResponse(
+                content=types.Content(
+                    role="model", parts=[types.Part(text="Lay's Classic: potato, oil, salt.")]
+                )
+            )
+            return
+        call = types.FunctionCall(
+            name="lookup_ingredient_database",
+            args={"ingredient_name": f"additive {len(self._requests)}"},
+        )
+        yield LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(function_call=call)])
+        )
+
+
+def test_food_answers_from_gathered_evidence_when_its_step_budget_runs_out():
+    app_settings = settings(food_agent_mode="gemini", food_max_llm_calls=4)
+    with TestClient(create_app(app_settings)) as client:
+        model = Researcher()
+        client.app.state.conversations.runner("food").agent.model = model
+        session_id = client.post("/api/agents/food/sessions").json()["id"]
+
+        response = client.post(
+            f"/api/agents/food/sessions/{session_id}/messages",
+            json={"text": "Ingredients of Lays chips in India", "request_id": str(uuid4())},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["messages"][-1]["text"] == "Lay's Classic: potato, oil, salt."
+        assert len(model._requests) == 4
+        *research, final = model._requests
+        assert all(request.config.tool_config is None for request in research)
+        assert "last step for this reply" in str(final.config.system_instruction)
+        # The final call still sees every lookup result gathered so far.
+        responses = [
+            part.function_response
+            for content in final.contents
+            for part in content.parts or []
+            if part.function_response
+        ]
+        assert len(responses) == 3
+
+
 def test_accepted_food_failure_has_one_canonical_error_and_retry_metadata():
     with TestClient(create_app(settings(food_agent_mode="gemini"))) as client:
         model = SlowGemini()
@@ -340,6 +391,7 @@ def test_accepted_food_failure_has_one_canonical_error_and_retry_metadata():
         assert turn["status"] == "failed"
         assert turn["error"]["code"] == "provider_failure"
         assert turn["error"]["message"].startswith("The food companion could not")
+        assert len(turn["error"]["diagnostic_id"]) == 12
         assert turn["retry"] == {
             "allowed": True,
             "after_seconds": None,
@@ -354,9 +406,7 @@ def test_accepted_food_failure_has_one_canonical_error_and_retry_metadata():
         assert errors[0]["error"] == turn["error"]
         assert errors[0]["retry"] == turn["retry"]
 
-        replay = client.post(
-            url, json={"text": "Check this ingredient", "request_id": request_id}
-        )
+        replay = client.post(url, json={"text": "Check this ingredient", "request_id": request_id})
         assert replay.status_code == 202
         assert replay.json()["status"] == "failed"
         assert len(model._requests) == 1
@@ -402,16 +452,20 @@ def test_orphaned_accepted_turn_becomes_one_recoverable_failure():
         ),
     ],
 )
-def test_failure_saved_without_internal_details_and_recovery(chat_client, failure, status):
+def test_failure_saved_without_internal_details_and_recovery(chat_client, failure, status, caplog):
     client, model = chat_client
     model._failure = failure
     session_id = new_session(client)
     request_id = str(uuid4())
     response = send(client, session_id, "Mehendi outfit", request_id)
     assert response.status_code == status
+    assert len(response.headers["X-Diagnostic-ID"]) == 12
     assert "details" not in response.text
     saved = client.get(f"/api/agents/stylist/sessions/{session_id}").json()
     assert saved["messages"][-1]["status"] == "error"
+    assert saved["messages"][-1]["error"]["diagnostic_id"] == response.headers["X-Diagnostic-ID"]
+    assert f"diagnostic_id={response.headers['X-Diagnostic-ID']}" in caplog.text
+    assert f"request_id={request_id}" in caplog.text
     assert send(client, session_id, "Mehendi outfit", request_id).status_code == 200
     assert len(model._requests) == 1
     model._failure = None
@@ -508,3 +562,4 @@ def test_turn_limit_and_concurrent_requests():
         await service.close()
 
     asyncio.run(check())
+

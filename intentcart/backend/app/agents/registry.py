@@ -78,6 +78,7 @@ AGENTS = {
             "diet": profile.diet,
             "food_countries": profile.food_countries,
         },
+        max_llm_calls=lambda settings: settings.food_max_llm_calls,
         timeout_seconds=lambda settings: settings.food_timeout_seconds,
         default_title="New review",
         failure_subject="The food companion",

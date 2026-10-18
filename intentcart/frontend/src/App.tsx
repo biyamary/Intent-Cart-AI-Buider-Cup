@@ -36,6 +36,16 @@ export default function App() {
       setReady(true)
     })
   }, [cache])
+  // Only surface the mode bar when something needs the user's attention.
+  const liveAgents =
+    health.data?.food_agent_mode === 'gemini' || health.data?.stylist_agent_mode === 'gemini'
+  const modeNotice = health.isError
+    ? 'API unavailable · Start the backend on port 8000'
+    : !health.data || liveAgents
+      ? null
+      : health.data.agent_mode === 'demo'
+        ? 'Local demo · Sample data and placeholder AI responses'
+        : 'Gemini mode · Prompts and integrations require configuration'
   return (
     <>
       <header className="site-header">
@@ -62,28 +72,22 @@ export default function App() {
           </NavLink>
         </div>
       </header>
-      <div className="app-mode">
-        {health.isError
-          ? 'API unavailable · Start the backend on port 8000'
-          : health.data
-            ? health.data.food_agent_mode === 'gemini' || health.data.stylist_agent_mode === 'gemini'
-              ? 'Conversational Agents · Gemini with Search & Evidence'
-              : health.data.agent_mode === 'demo'
-                ? 'Local demo · Sample data and placeholder AI responses'
-                : 'Gemini mode · Prompts and integrations require configuration'
-            : 'Connecting to your companion…'}
-        {auth && (
-          <button
-            className="text-button"
-            onClick={() => {
-              setAuthError(null)
-              void (uid ? logOut() : signIn()).catch(setAuthError)
-            }}
-          >
-            {uid ? 'Sign out' : 'Sign in with Google'}
-          </button>
-        )}
-      </div>
+      {(modeNotice || auth) && (
+        <div className="app-mode">
+          {modeNotice}
+          {auth && (
+            <button
+              className="text-button"
+              onClick={() => {
+                setAuthError(null)
+                void (uid ? logOut() : signIn()).catch(setAuthError)
+              }}
+            >
+              {uid ? 'Sign out' : 'Sign in with Google'}
+            </button>
+          )}
+        </div>
+      )}
       <main className="main">
         <ErrorMessage error={authError} />
         {!ready ? (

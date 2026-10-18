@@ -45,6 +45,7 @@ class RetryAdvice(Contract):
 class TurnError(Contract):
     code: str
     message: str
+    diagnostic_id: str | None = None
 
 
 TurnPhase = Literal["queued", "running", "succeeded", "failed"]

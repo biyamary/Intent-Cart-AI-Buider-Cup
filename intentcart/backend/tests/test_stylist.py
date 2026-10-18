@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 from uuid import uuid4
 
 import pytest
@@ -7,7 +9,7 @@ from fastapi.testclient import TestClient
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 from pydantic import PrivateAttr
 
 from app.auth import current_user
@@ -130,11 +132,17 @@ def discovery_model():
                     "https://atelier.example.in/products/mirror-lehenga",
                 ],
             }[category]
-            grounding = types.GroundingMetadata(
-                grounding_chunks=[
-                    types.GroundingChunk(web=types.GroundingChunkWeb(uri=REDIRECT, title="craft"))
-                ]
-            ) if category == "earrings" else None
+            grounding = (
+                types.GroundingMetadata(
+                    grounding_chunks=[
+                        types.GroundingChunk(
+                            web=types.GroundingChunkWeb(uri=REDIRECT, title="craft")
+                        )
+                    ]
+                )
+                if category == "earrings"
+                else None
+            )
             return text(json.dumps({"products": [{"url": u} for u in urls]}), grounding)
         if "score product candidates" in instruction:
             scores = []
@@ -159,13 +167,17 @@ def test_discovery_workflow_verifies_ranks_and_isolates_failures():
         brief = LookBrief(occasion="Mehendi", total_budget_minor=1_000_000)
         look = await looks.create_for_session("user-a", "session-1", brief)
         await looks.propose_checklist(
-            "user-a", look.id,
-            [PieceSpec(category="outfit", target="mint lehenga"),
-             PieceSpec(category="earrings", target="silver jhumkas"),
-             PieceSpec(category="footwear", target="juttis")],
+            "user-a",
+            look.id,
+            [
+                PieceSpec(category="outfit", target="mint lehenga"),
+                PieceSpec(category="earrings", target="silver jhumkas"),
+                PieceSpec(category="footwear", target="juttis"),
+            ],
         )
         look = await looks.confirm_checklist(
-            "user-a", look.id,
+            "user-a",
+            look.id,
             [ChecklistChoice(category=c) for c in ("outfit", "earrings", "footwear")],
         )
         started = await discovery.start("user-a", look.id)
@@ -201,7 +213,11 @@ def test_discovery_workflow_verifies_ranks_and_isolates_failures():
         await looks.item_action("user-a", look.id, outfit.id, "lock", lehenga.id)
         await discovery.rescore("user-a", look.id)
         await discovery.wait_idle()
-        ranked = [r for r in model._requests if "score product candidates" in str(r.config.system_instruction)]
+        ranked = [
+            r
+            for r in model._requests
+            if "score product candidates" in str(r.config.system_instruction)
+        ]
         assert "Mint lehenga set" in last_text(ranked[-1])
         return look
 
@@ -228,8 +244,14 @@ def test_discovery_disabled_marks_items_honestly():
 # ---------------------------------------------------------------------------- shortlist
 def product(pid, price, label, score=50, source="live", url=None):
     return CatalogProduct(
-        id=pid, category="earrings", title=pid, price_minor=price, source=source,
-        seller_label=label, style_score=score, url=url,
+        id=pid,
+        category="earrings",
+        title=pid,
+        price_minor=price,
+        source=source,
+        seller_label=label,
+        style_score=score,
+        url=url,
     )
 
 
@@ -381,10 +403,13 @@ def test_coordinator_builds_the_look_through_tools(stylist):
     client, model = stylist
     script = {
         1: call("save_brief", occasion="Sister's mehendi", total_budget_inr=6000, colours=["mint"]),
-        2: call("propose_checklist", items=[
-            {"category": "outfit", "target": "mint lehenga with mirror work"},
-            {"category": "Earrings", "target": "oxidised silver jhumkas"},
-        ]),
+        2: call(
+            "propose_checklist",
+            items=[
+                {"category": "outfit", "target": "mint lehenga with mirror work"},
+                {"category": "Earrings", "target": "oxidised silver jhumkas"},
+            ],
+        ),
         3: text("Your checklist is on the board."),
         4: call("select_product", category="outfit", product_id="p_invented"),
         5: text("Please confirm the checklist first."),
@@ -402,7 +427,8 @@ def test_coordinator_builds_the_look_through_tools(stylist):
     assert look["status"] == "awaiting_checklist"
     assert look["brief"]["total_budget_minor"] == 600000 and look["brief"]["colours"] == ["mint"]
     assert [(i["category"], i["target"]) for i in look["items"]] == [
-        ("outfit", "mint lehenga with mirror work"), ("earrings", "oxidised silver jhumkas"),
+        ("outfit", "mint lehenga with mirror work"),
+        ("earrings", "oxidised silver jhumkas"),
     ]
     assert "Current look board" in str(model._requests[2].config.system_instruction)
     assert "mint lehenga" in str(model._requests[2].config.system_instruction)
@@ -417,6 +443,209 @@ def test_coordinator_builds_the_look_through_tools(stylist):
     assert client.get(f"/api/clothes/looks/{look_id}").status_code == 404
 
 
+@pytest.fixture
+def sqlite_stylist(tmp_path):
+    """The production session backend, which rejects writes from stale session copies."""
+    app_settings = settings(
+        agent_session_backend="sqlite",
+        agent_session_db_path=tmp_path / "sessions.db",
+    )
+    with TestClient(create_app(app_settings)) as client:
+        model = Scripted()
+        client.app.state.conversations.runner("stylist").agent.model = model
+        yield client, model
+
+
+def test_tool_turn_survives_mid_run_progress_writes_on_the_database_backend(sqlite_stylist):
+    client, model = sqlite_stylist
+    script = {
+        1: call(
+            "save_brief",
+            occasion="Girlfriend's birthday",
+            total_budget_inr=5000,
+            description="Top and jeans",
+        ),
+        2: call(
+            "propose_checklist",
+            items=[{"category": "top", "target": "fitted top"}, {"category": "jeans"}],
+        ),
+        3: text("Here is a top and jeans checklist for her birthday."),
+    }
+    model._handler = lambda request, number: script[number]
+    session_id = new_session(client)
+
+    response = send(
+        client,
+        session_id,
+        "I want to buy a top and jeans for my gf with 5k budget for her bd",
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["look_id"]
+    assert body["messages"][-1]["status"] == "complete"
+    assert tool_responses(model._requests[1])[0]["saved"] is True
+    look = client.get(f"/api/clothes/looks/{body['look_id']}").json()
+    assert [item["category"] for item in look["items"]] == ["top", "jeans"]
+
+    # Follow-up turns keep working on the same persisted session.
+    model._handler = lambda request, number: text("Happy to help further.")
+    follow_up = send(client, session_id, "Thanks")
+    assert follow_up.status_code == 200, follow_up.text
+    assert follow_up.json()["look_id"] == body["look_id"]
+
+
+def test_polled_tool_turn_reports_live_stages_on_the_database_backend(sqlite_stylist):
+    client, _model = sqlite_stylist
+    gate = threading.Event()
+
+    class Paused(Scripted):
+        async def generate_content_async(self, llm_request, stream=False):
+            self._requests.append(llm_request.model_copy(deep=True))
+            if len(self._requests) == 1:
+                yield call("save_brief", occasion="Birthday", total_budget_inr=5000)
+                return
+            while not gate.is_set():
+                await asyncio.sleep(0.01)
+            yield text("Your birthday brief is saved.")
+
+    paused = Paused()
+    client.app.state.conversations.runner("stylist").agent.model = paused
+    session_id = new_session(client)
+    request_id = str(uuid4())
+    turn_url = f"/api/agents/stylist/sessions/{session_id}/turns"
+
+    accepted = client.post(turn_url, json={"text": "Birthday top, 5k", "request_id": request_id})
+    assert accepted.status_code == 202, accepted.text
+
+    def poll(until, timeout=3):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            turn = client.get(f"{turn_url}/{request_id}").json()
+            if until(turn):
+                return turn
+            time.sleep(0.01)
+        raise AssertionError(f"turn never matched: {turn}")
+
+    # Only "understanding" is persisted at turn start; later stages are served live.
+    running = poll(lambda turn: turn["progress"]["stage"] in {"planning", "preparing"})
+    assert running["status"] == "running"
+    gate.set()
+    done = poll(lambda turn: turn["status"] in {"succeeded", "failed"})
+
+    assert done["status"] == "succeeded", done
+    assert done["progress"]["stage"] == "complete"
+    conversation = client.get(f"/api/agents/stylist/sessions/{session_id}").json()
+    assert conversation["look_id"]
+    assert conversation["messages"][-1]["text"] == "Your birthday brief is saved."
+
+
+def test_session_look_creation_is_idempotent_and_keeps_the_latest_brief():
+    async def scenario():
+        service = LookService(MemoryStore())
+        first = await service.create_for_session(
+            "user-a",
+            "session-a",
+            LookBrief(occasion="Birthday", total_budget_minor=500_000),
+        )
+        second = await service.create_for_session(
+            "user-a",
+            "session-a",
+            LookBrief(
+                occasion="Birthday dinner",
+                description="Top and jeans",
+                total_budget_minor=500_000,
+            ),
+        )
+        assert second.id == first.id
+        assert second.brief.occasion == "Birthday dinner"
+        assert second.brief.description == "Top and jeans"
+        assert len(await service.list_looks("user-a")) == 1
+
+    asyncio.run(scenario())
+
+
+def test_unlinked_stylist_look_is_recovered_before_the_next_model_call(stylist):
+    client, model = stylist
+    session_id = new_session(client)
+    look = asyncio.run(
+        client.app.state.looks.create_for_session(
+            "local-demo-user",
+            session_id,
+            LookBrief(
+                occasion="Girlfriend's birthday",
+                description="Top and jeans",
+                total_budget_minor=500_000,
+            ),
+        )
+    )
+    model._handler = lambda request, number: (
+        call("get_look") if number == 1 else text("I recovered your saved look board.")
+    )
+
+    # Reading the conversation finds the look without writing to the session: a turn
+    # could be running, and an extra append would make the runner's session stale.
+    sessions = client.app.state.conversations.sessions
+
+    def event_count():
+        stored = asyncio.run(
+            sessions.get_session(
+                app_name="intentcart_stylist", user_id="local-demo-user", session_id=session_id
+            )
+        )
+        return len(stored.events)
+
+    before = event_count()
+    assert client.get(f"/api/agents/stylist/sessions/{session_id}").json()["look_id"] == look.id
+    assert event_count() == before
+
+    response = send(client, session_id, "Please continue")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["look_id"] == look.id
+    recovered = tool_responses(model._requests[1])[0]
+    assert recovered["occasion"] == "Girlfriend's birthday"
+    assert recovered["budget"] == "₹5,000"
+
+
+def test_provider_failure_after_save_brief_keeps_one_recoverable_look(stylist):
+    client, model = stylist
+
+    def handle(_request, number):
+        if number in {1, 3}:
+            return call(
+                "save_brief",
+                occasion="Girlfriend's birthday",
+                total_budget_inr=5000,
+                description="Top and jeans",
+            )
+        if number == 2:
+            raise ServerError(503, {"error": {"message": "private-provider-payload"}})
+        return text("Your top and jeans board is ready.")
+
+    model._handler = handle
+    session_id = new_session(client)
+    failed = send(
+        client,
+        session_id,
+        "I want to buy a top and jeans for my gf with 5k budget for her bd",
+    )
+
+    assert failed.status_code == 503
+    saved = client.get(f"/api/agents/stylist/sessions/{session_id}").json()
+    assert saved["look_id"]
+    assert saved["messages"][-1]["error"]["code"] == "provider_unavailable"
+    assert len(saved["messages"][-1]["error"]["diagnostic_id"]) == 12
+
+    continued = send(client, session_id, "Please continue with that plan")
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["look_id"] == saved["look_id"]
+    session_looks = [
+        look for look in client.get("/api/clothes/looks").json() if look["session_id"] == session_id
+    ]
+    assert len(session_looks) == 1
+
+
 def test_reference_attachments_are_validated_owned_and_analysed(stylist):
     client, model = stylist
     analysis_model = Scripted()
@@ -425,12 +654,18 @@ def test_reference_attachments_are_validated_owned_and_analysed(stylist):
     def analyse(request, _):
         seen["image"] = any(
             part.inline_data and part.inline_data.mime_type == "image/png"
-            for content in request.contents for part in content.parts or []
+            for content in request.contents
+            for part in content.parts or []
         )
-        return text(json.dumps({
-            "summary": "Mint lehenga with mirror work.", "palette": ["mint"],
-            "pieces": [{"category": "outfit", "target": "mint mirror-work lehenga"}],
-        }))
+        return text(
+            json.dumps(
+                {
+                    "summary": "Mint lehenga with mirror work.",
+                    "palette": ["mint"],
+                    "pieces": [{"category": "outfit", "target": "mint mirror-work lehenga"}],
+                }
+            )
+        )
 
     analysis_model._handler = analyse
     client.app.state.studio.models["reference_analysis"] = analysis_model
@@ -442,12 +677,18 @@ def test_reference_attachments_are_validated_owned_and_analysed(stylist):
     model._handler = lambda request, n: script[n]
     session_id = new_session(client)
     url = f"/api/agents/stylist/sessions/{session_id}/attachments"
-    assert client.post(url, files={"image": ("x.png", b"not an image", "image/png")}).status_code == 415
+    assert (
+        client.post(url, files={"image": ("x.png", b"not an image", "image/png")}).status_code
+        == 415
+    )
     assert client.post(url, files={"image": ("x.gif", PNG, "image/gif")}).status_code == 415
     upload = client.post(url, files={"image": ("look.png", PNG, "image/png")})
     assert upload.status_code == 201, upload.text
     name = upload.json()["name"]
-    assert send(client, session_id, "Recreate this", attachments=["ref-000000000000.png"]).status_code == 422
+    assert (
+        send(client, session_id, "Recreate this", attachments=["ref-000000000000.png"]).status_code
+        == 422
+    )
 
     response = send(client, session_id, "Recreate this look", attachments=[name])
     assert response.status_code == 200, response.text
@@ -461,7 +702,10 @@ def test_reference_attachments_are_validated_owned_and_analysed(stylist):
 
     artifact = f"/api/agents/stylist/sessions/{session_id}/artifacts/{name}"
     assert client.get(artifact).content == PNG
-    assert client.get(f"/api/agents/stylist/sessions/{session_id}/artifacts/..%2Fsecret").status_code == 404
+    assert (
+        client.get(f"/api/agents/stylist/sessions/{session_id}/artifacts/..%2Fsecret").status_code
+        == 404
+    )
     client.app.dependency_overrides[current_user] = lambda: "someone-else"
     assert client.get(artifact).status_code == 404
 
@@ -505,9 +749,16 @@ class Gated(Scripted):
             yield text(json.dumps({"products": [{"url": url}]}))
         else:
             payload = json.loads(last_text(llm_request))
-            yield text(json.dumps({"scores": [
-                {"id": c["id"], "score": 80, "reason": "ok"} for c in payload["candidates"]
-            ]}))
+            yield text(
+                json.dumps(
+                    {
+                        "scores": [
+                            {"id": c["id"], "score": 80, "reason": "ok"}
+                            for c in payload["candidates"]
+                        ]
+                    }
+                )
+            )
 
 
 def test_newer_search_owns_the_item_and_stale_jobs_cannot_overwrite_it():

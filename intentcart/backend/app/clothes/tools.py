@@ -158,7 +158,9 @@ def tool_errors(fn):
             fields = ", ".join(".".join(map(str, e["loc"])) for e in error.errors()[:3])
             return {"error": f"Invalid values for: {fields}."}
         except Exception as error:  # noqa: BLE001 -- keep the conversation alive; no payload logs
-            logger.warning("Stylist tool failed: tool=%s error_type=%s", fn.__name__, type(error).__name__)
+            logger.warning(
+                "Stylist tool failed: tool=%s error_type=%s", fn.__name__, type(error).__name__
+            )
             return {"error": "That step is unavailable right now. Try again in a moment."}
 
     return wrapper
@@ -175,12 +177,19 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
     async def current(tool_context: ToolContext) -> Look:
         look_id = tool_context.state.get(LOOK_KEY)
         if not look_id:
-            raise LookError(409, "No look yet: call save_brief with the occasion and budget first.")
+            recovered = await looks.find_for_session(tool_context.user_id, tool_context.session.id)
+            if recovered is None:
+                raise LookError(
+                    409, "No look yet: call save_brief with the occasion and budget first."
+                )
+            tool_context.state[LOOK_KEY] = recovered.id
+            return recovered
         return await looks.get(tool_context.user_id, look_id)
 
     async def restart_uncovered(uid: str, look: Look) -> Look:
         ids = [
-            item.id for item in look.items
+            item.id
+            for item in look.items
             if item.status == "open" and not item.pool and item.discovery != "searching"
         ]
         if ids:
@@ -248,12 +257,18 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
                 search_changed = any(
                     changes.get(key) is not None
                     for key in (
-                        "description", "sizes", "colours", "avoid_colours",
-                        "platforms", "retailer_policy", "small_business",
+                        "description",
+                        "sizes",
+                        "colours",
+                        "avoid_colours",
+                        "platforms",
+                        "retailer_policy",
+                        "small_business",
                     )
                 )
                 ids = [
-                    item.id for item in look.items
+                    item.id
+                    for item in look.items
                     if item.status == "open"
                     and (search_changed or (not item.pool and item.discovery != "searching"))
                 ]
@@ -281,7 +296,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
                 look with more affordable accessories".
         """
         look = await current(tool_context)
-        names = list(dict.fromkeys(tool_context.state.get("temp:attachments", []) + look.references))
+        names = list(
+            dict.fromkeys(tool_context.state.get("temp:attachments", []) + look.references)
+        )
         images = []
         for name in names[:3]:
             part = await tool_context.load_artifact(name)
@@ -347,9 +364,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
                     raise LookError(404, f"'{key}' is not on the checklist.")
                 existing.status = {"remove": "removed", "own": "owned", "restore": "open"}[action]
 
-            look = await looks.mutate(
-                uid, look.id, change, "checklist_edit", plan_change=True
-            )
+            look = await looks.mutate(uid, look.id, change, "checklist_edit", plan_change=True)
         elif action == "add":
             look = await looks.add_item(uid, look.id, key, target)
             await discovery.start(uid, look.id, [find_item(look, key).id])
@@ -373,10 +388,15 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         """
         look = await current(tool_context)
         if look.status != "awaiting_checklist":
-            return {"error": "The checklist is already confirmed. Use find_products to search again."}
+            return {
+                "error": "The checklist is already confirmed. Use find_products to search again."
+            }
         choices = [
-            ChecklistChoice(category=i.category, status=i.status if i.status != "locked" else "open",
-                            target=i.target)
+            ChecklistChoice(
+                category=i.category,
+                status=i.status if i.status != "locked" else "open",
+                target=i.target,
+            )
             for i in look.items
         ]
         look = await looks.confirm_checklist(tool_context.user_id, look.id, choices)
@@ -424,20 +444,25 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         look = await current(tool_context)
         item = find_item(look, category)
         if item.status != "open":
-            return {"error": f"'{item.category}' is {item.status}; swap it first to see alternatives."}
+            return {
+                "error": f"'{item.category}' is {item.status}; swap it first to see alternatives."
+            }
 
         def remember(saved: Look):
             target = find_item(saved, item.id)
             target.hints = [*target.hints, request][-4:]
 
-        look = await looks.mutate(
-            tool_context.user_id, look.id, remember, "hint", plan_change=True
-        )
+        look = await looks.mutate(tool_context.user_id, look.id, remember, "hint", plan_change=True)
         started = await discovery.start(
-            tool_context.user_id, look.id, [item.id], request=request,
+            tool_context.user_id,
+            look.id,
+            [item.id],
+            request=request,
             max_price_minor=max_price_inr * 100 if max_price_inr else None,
         )
-        await restart_uncovered(tool_context.user_id, await looks.get(tool_context.user_id, look.id))
+        await restart_uncovered(
+            tool_context.user_id, await looks.get(tool_context.user_id, look.id)
+        )
         return {"searching": bool(started), "note": "New options will appear on the board shortly."}
 
     @tool_errors
@@ -507,12 +532,16 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             preserve_selected=preserve_selected,
         )
         ids = [item.id for item in look.items if item.status == "open"]
-        started = await discovery.start(
-            tool_context.user_id,
-            look.id,
-            ids,
-            request=request or kind.replace("_", " "),
-        ) if ids else []
+        started = (
+            await discovery.start(
+                tool_context.user_id,
+                look.id,
+                ids,
+                request=request or kind.replace("_", " "),
+            )
+            if ids
+            else []
+        )
         return {
             "updated": True,
             "searching": len(started),
@@ -561,7 +590,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
 
         def change(saved: Look):
             existing = {i.url for i in saved.inspiration}
-            saved.inspiration = (saved.inspiration + [i for i in found if i.url not in existing])[-12:]
+            saved.inspiration = (saved.inspiration + [i for i in found if i.url not in existing])[
+                -12:
+            ]
 
         await looks.mutate(tool_context.user_id, look.id, change, "inspiration")
         return {
@@ -571,7 +602,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         }
 
     @tool_errors
-    async def visualize_look(tool_context: ToolContext, kind: str = "concept", instructions: str = "") -> dict:
+    async def visualize_look(
+        tool_context: ToolContext, kind: str = "concept", instructions: str = ""
+    ) -> dict:
         """Generate an AI concept image of the look and show it on the board.
 
         Args:
@@ -593,7 +626,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             if not images:
                 return {"error": "There is no reference image to edit."}
         elif kind == "final":
-            chosen = [i.chosen_product for i in look.items if i.status == "locked" and i.chosen_product]
+            chosen = [
+                i.chosen_product for i in look.items if i.status == "locked" and i.chosen_product
+            ]
             for product in chosen[:6]:
                 if product.image_url and (image := await fetch_image(product.image_url)):
                     images.append(image)
@@ -605,15 +640,23 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         extension = {"image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
         name = f"concept-{uuid4().hex[:10]}.{extension}"
         await tool_context.save_artifact(name, types.Part.from_bytes(data=data, mime_type=mime))
-        caption = {"concept": "AI concept of the look", "edit_reference": "AI edit of your reference",
-                   "final": "AI composition of your selected pieces"}[kind]
+        caption = {
+            "concept": "AI concept of the look",
+            "edit_reference": "AI edit of your reference",
+            "final": "AI composition of your selected pieces",
+        }[kind]
 
         def change(saved: Look):
-            saved.concepts = (saved.concepts + [ConceptImage(artifact=name, kind=kind, caption=caption)])[-12:]
+            saved.concepts = (
+                saved.concepts + [ConceptImage(artifact=name, kind=kind, caption=caption)]
+            )[-12:]
 
         await looks.mutate(tool_context.user_id, look.id, change, "concept")
-        return {"image_created": True, "kind": kind,
-                "note": "Shown on the board, labelled as an AI concept (not a product)."}
+        return {
+            "image_created": True,
+            "kind": kind,
+            "note": "Shown on the board, labelled as an AI concept (not a product).",
+        }
 
     @tool_errors
     async def find_local_boutiques(tool_context: ToolContext, category: str) -> dict:
@@ -651,9 +694,21 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         return {"assembled": True, "look": snapshot(look, candidates=False), "styling_note": note}
 
     functions = [
-        save_brief, analyze_reference, propose_checklist, update_checklist, start_shopping,
-        find_products, find_alternatives, select_product, change_item, refine_look, add_product_link,
-        get_look, find_inspiration, visualize_look, finish_look,
+        save_brief,
+        analyze_reference,
+        propose_checklist,
+        update_checklist,
+        start_shopping,
+        find_products,
+        find_alternatives,
+        select_product,
+        change_item,
+        refine_look,
+        add_product_link,
+        get_look,
+        find_inspiration,
+        visualize_look,
+        finish_look,
     ]
     if settings.stylist_maps_enabled:
         functions.append(find_local_boutiques)
@@ -669,7 +724,9 @@ async def verify_link(category: str, url: str, price_minor: int | None) -> Catal
     if facts is not None:
         return to_product(facts, category).model_copy(update={"source": "user"})
     if price_minor is None:
-        raise LookError(422, "No price could be read from that page. Ask the user for the price they see.")
+        raise LookError(
+            422, "No price could be read from that page. Ask the user for the price they see."
+        )
     label, note = classify(clean)
     return CatalogProduct(
         id=product_id(clean),

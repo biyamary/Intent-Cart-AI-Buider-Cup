@@ -18,7 +18,7 @@ export interface ChatMessage {
   search_entry_point: string | null
   attachments?: string[]
   request_id?: string | null
-  error?: { code: string; message: string } | null
+  error?: { code: string; message: string; diagnostic_id?: string | null } | null
   retry?: RetryAdvice | null
 }
 export interface ConversationSummary {

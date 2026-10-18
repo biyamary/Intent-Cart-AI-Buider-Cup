@@ -98,9 +98,7 @@ def refresh(look: Look) -> Look:
                 if p.category == item.category and p.price_minor <= item.budget_cap_minor
             ]
         else:
-            item.candidates = shortlist(
-                item, look.brief.retailer_policy, look.brief.platforms
-            )
+            item.candidates = shortlist(item, look.brief.retailer_policy, look.brief.platforms)
     return look
 
 
@@ -120,7 +118,19 @@ class LookService:
         return refresh(Look.model_validate(record))
 
     async def list_looks(self, uid: str) -> list[Look]:
-        return [refresh(Look.model_validate(record)) for record in await self.store.list(uid, "looks")]
+        return [
+            refresh(Look.model_validate(record)) for record in await self.store.list(uid, "looks")
+        ]
+
+    async def find_for_session(self, uid: str, session_id: str) -> Look | None:
+        """Return the newest agent look created for a conversation, if one exists."""
+        matches = [
+            look
+            for look in await self.list_looks(uid)
+            if look.mode == "agent" and look.session_id == session_id
+        ]
+        return max(matches, key=lambda look: look.updated_at) if matches else None
+
 
     async def save(self, uid: str, look: Look) -> Look:
         look.revision += 1
@@ -162,7 +172,13 @@ class LookService:
         return await self.save(uid, look)
 
     async def create_for_session(self, uid: str, session_id: str, brief: LookBrief) -> Look:
-        look = Look(brief=brief, items=[], mode="agent", session_id=session_id)
+        # A provider failure may happen after this write but before ADK persists the
+        # tool-response state. Replaying save_brief must reconnect to the same board,
+        # not create another orphaned look.
+        if existing := await self.find_for_session(uid, session_id):
+            return await self.update_brief(uid, existing.id, brief.model_dump())
+        look_id = hashlib.sha256(f"agent-look:{session_id}".encode()).hexdigest()[:32]
+        look = Look(id=look_id, brief=brief, items=[], mode="agent", session_id=session_id)
         look.remaining_budget_minor = brief.total_budget_minor
         return await self.create(uid, look)
 
@@ -189,9 +205,7 @@ class LookService:
 
     async def replan(self, uid: str, look_id: str) -> Look:
         """Create a new plan revision while reusing every verified product pool."""
-        return await self.mutate(
-            uid, look_id, lambda look: None, "replanned", plan_change=True
-        )
+        return await self.mutate(uid, look_id, lambda look: None, "replanned", plan_change=True)
 
     async def refine(
         self,
@@ -241,7 +255,9 @@ class LookService:
     async def propose_checklist(self, uid: str, look_id: str, pieces: list[PieceSpec]) -> Look:
         def change(look: Look):
             if any(item.status == "locked" for item in look.items):
-                raise LookError(409, "Items are already selected; add or remove single items instead.")
+                raise LookError(
+                    409, "Items are already selected; add or remove single items instead."
+                )
             unique = list({piece.category: piece for piece in pieces}.values())
             if not unique:
                 raise LookError(422, "Propose at least one item.")
@@ -253,7 +269,9 @@ class LookService:
 
         return await self.mutate(uid, look_id, change, "checklist_proposed", plan_change=True)
 
-    async def confirm_checklist(self, uid: str, look_id: str, choices: list[ChecklistChoice]) -> Look:
+    async def confirm_checklist(
+        self, uid: str, look_id: str, choices: list[ChecklistChoice]
+    ) -> Look:
         def change(look: Look):
             if look.status != "awaiting_checklist":
                 raise LookError(409, "Checklist already confirmed. Use item actions to change it.")
@@ -303,7 +321,9 @@ class LookService:
                     raise LookError(422, "Choose a current candidate within the remaining budget.")
                 item.chosen_product, item.status = product, "locked"
             elif action == "reject":
-                if not product_id or not any(p.id == product_id for p in item.pool + item.candidates):
+                if not product_id or not any(
+                    p.id == product_id for p in item.pool + item.candidates
+                ):
                     raise LookError(422, "That product is not a candidate for this item.")
                 item.rejected_ids = [*item.rejected_ids, product_id][-50:]
             else:
@@ -371,7 +391,9 @@ class LookService:
 
         return await self.mutate(uid, look_id, change, "rescored")
 
-    async def add_user_product(self, uid: str, look_id: str, item_id: str, product: CatalogProduct) -> Look:
+    async def add_user_product(
+        self, uid: str, look_id: str, item_id: str, product: CatalogProduct
+    ) -> Look:
         def change(look: Look):
             item = find_item(look, item_id)
             if item.status != "open":
@@ -396,9 +418,7 @@ class LookService:
 
 def find_item(look: Look, item_id_or_category: str) -> ChecklistItem:
     key = item_id_or_category.strip().lower()
-    item = next(
-        (i for i in look.items if i.id == item_id_or_category or i.category == key), None
-    )
+    item = next((i for i in look.items if i.id == item_id_or_category or i.category == key), None)
     if item is None:
         raise LookError(404, "Checklist item not found.")
     return item

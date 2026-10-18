@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -30,7 +31,7 @@ from app.agents.conversation_schemas import (
     TurnProgress,
     TurnStatus,
 )
-from app.agents.errors import AgentFailure, describe_agent_error
+from app.agents.errors import AgentFailure, StructuredResponseError, describe_agent_error
 from app.agents.grounding import public_message
 from app.agents.privacy import adk_app, install_log_redaction
 from app.agents.registry import AGENTS, AgentRegistration
@@ -128,6 +129,10 @@ class ConversationService:
         # Accepted turns run only in this process. Their lifecycle is persisted in ADK
         # events, but multi-worker execution requires a shared queue and distributed lease.
         self._tasks: dict[tuple[str, str, str, str], asyncio.Task] = {}
+        # Mid-run progress stages stay in memory. Appending them to the session while
+        # the runner holds it makes the runner's next append stale, which SQL-backed
+        # session services reject (StaleSessionError) after any tool call.
+        self._live: dict[tuple[str, str, str, str], TurnStatus] = {}
 
     def registration(self, agent_id: str) -> AgentRegistration:
         registration = AGENTS.get(agent_id)
@@ -185,6 +190,7 @@ class ConversationService:
 
     async def get(self, agent_id: str, uid: str, session_id: str) -> Conversation:
         session = await self.get_session(agent_id, uid, session_id)
+        look_id = await self._recover_look_link(agent_id, uid, session)
         root_name = self.runner(agent_id).agent.name
         messages = [
             message for event in session.events if (message := public_message(event, root_name))
@@ -192,7 +198,7 @@ class ConversationService:
         return Conversation(
             **self.summary(agent_id, session).model_dump(),
             messages=messages,
-            look_id=session.state.get("look:id"),
+            look_id=look_id,
         )
 
     async def list(self, agent_id: str, uid: str) -> list[ConversationSummary]:
@@ -214,6 +220,18 @@ class ConversationService:
             state={"chat:title": registration.default_title},
         )
         return Conversation(**self.summary(agent_id, session).model_dump())
+
+    async def _recover_look_link(self, agent_id: str, uid: str, session) -> str | None:
+        """Find a stylist look whose tool write outlived its provider turn.
+
+        Read-only: a turn may be running, and appending to its session here would make
+        the runner's copy stale. The next turn persists the link via its state delta.
+        """
+        linked = session.state.get("look:id")
+        if linked or agent_id != "stylist" or self.services is None:
+            return linked
+        look = await self.services.looks.find_for_session(uid, session.id)
+        return look.id if look else None
 
     def _turn_from_session(
         self, agent_id: str, session_id: str, session, request_id: str
@@ -272,7 +290,11 @@ class ConversationService:
         retry = None
         error = None
         if failure is not None:
-            error = TurnError(code=failure.reason, message=failure.detail)
+            error = TurnError(
+                code=failure.reason,
+                message=failure.detail,
+                diagnostic_id=failure.diagnostic_id,
+            )
             retry = RetryAdvice(
                 allowed=failure.retryable,
                 after_seconds=failure.retry_after,
@@ -340,6 +362,8 @@ class ConversationService:
         if turn is None:
             raise HTTPException(404, "Turn not found.")
         session_key = (agent_id, uid, session_id)
+        if turn.status == "running" and session_key in self._active:
+            return self._live.get((*session_key, request_key), turn)
         if turn.status in {"queued", "running"} and session_key not in self._active:
             # A process restart cannot resume an in-memory task. Persist one clear
             # recovery message instead of leaving the UI polling forever. Taking
@@ -381,13 +405,16 @@ class ConversationService:
         ):
             item_name = "review" if agent_id == "food" else "look"
             raise HTTPException(
-                409, f"This conversation has reached its limit. Start a new {item_name} to continue."
+                409,
+                f"This conversation has reached its limit. Start a new {item_name} to continue.",
             )
         registration = self.registration(agent_id)
         state_delta: dict[str, Any] = {
             "chat:request_id": str(body.request_id),
             "temp:profile": registration.profile_context(profile),
         }
+        if look_id := await self._recover_look_link(agent_id, uid, session):
+            state_delta["look:id"] = look_id
         if body.attachments:
             if not registration.accepts_images:
                 raise HTTPException(422, "This assistant does not accept images.")
@@ -428,6 +455,8 @@ class ConversationService:
         registration = self.registration(agent_id)
         runner = self.runner(agent_id)
         stage = "understanding"
+        invocation_id = None
+        live_key = (agent_id, uid, session_id, request_id)
         await self._record_progress(
             agent_id, uid, session_id, request_id, "running", stage, created_at
         )
@@ -443,23 +472,23 @@ class ConversationService:
                     state_delta=state_delta,
                     run_config=RunConfig(max_llm_calls=registration.max_llm_calls(self.settings)),
                 ):
+                    invocation_id = event.invocation_id or invocation_id
                     next_stage = self._event_progress(agent_id, event)
                     if next_stage is not None and next_stage != stage:
                         stage = next_stage
-                        await self._record_progress(
+                        self._live[live_key] = self._turn_status(
                             agent_id,
-                            uid,
                             session_id,
                             request_id,
                             "running",
                             stage,
-                            created_at,
+                            created_at=created_at,
                         )
                     message = public_message(event, runner.agent.name)
                     if message and message.role == "assistant" and message.status == "complete":
                         has_answer = True
                 if not has_answer:
-                    raise ValueError("No public assistant reply")
+                    raise StructuredResponseError("empty_response")
         except asyncio.CancelledError:
             failure = AgentFailure(
                 503,
@@ -472,11 +501,18 @@ class ConversationService:
             )
             raise
         except Exception as error:  # noqa: BLE001 - redact all SDK failures at API boundary
-            failure = describe_agent_error(error, registration.failure_subject)
+            failure = replace(
+                describe_agent_error(error, registration.failure_subject),
+                diagnostic_id=uuid4().hex[:12],
+            )
             # No exception text, prompts, API keys, URLs or user content in logs.
             logger.warning(
-                "Agent turn failed: agent=%s error_type=%s status=%s reason=%s retry_after=%s",
+                "Agent turn failed: agent=%s request_id=%s invocation_id=%s diagnostic_id=%s "
+                "error_type=%s status=%s reason=%s retry_after=%s",
                 agent_id,
+                request_id,
+                invocation_id,
+                failure.diagnostic_id,
                 type(error).__name__,
                 failure.status,
                 failure.reason,
@@ -560,10 +596,9 @@ class ConversationService:
         session_key: tuple[str, str, str],
     ):
         try:
-            await self._execute_turn(
-                agent_id, uid, session_id, body, state_delta, created_at
-            )
+            await self._execute_turn(agent_id, uid, session_id, body, state_delta, created_at)
         finally:
+            self._live.pop((*session_key, str(body.request_id)), None)
             self._active.discard(session_key)
 
     async def send(
@@ -595,14 +630,17 @@ class ConversationService:
                 agent_id, uid, session_id, body, state_delta, created_at
             )
             if failure is not None:
-                headers = (
-                    {"Retry-After": str(failure.retry_after)}
-                    if failure.retry_after is not None
-                    else None
-                )
-                raise HTTPException(failure.status, failure.detail, headers=headers) from None
+                headers = {}
+                if failure.retry_after is not None:
+                    headers["Retry-After"] = str(failure.retry_after)
+                if failure.diagnostic_id:
+                    headers["X-Diagnostic-ID"] = failure.diagnostic_id
+                raise HTTPException(
+                    failure.status, failure.detail, headers=headers or None
+                ) from None
             return await self.get(agent_id, uid, session_id)
         finally:
+            self._live.pop((*session_key, request_id), None)
             self._active.discard(session_key)
 
     async def save_attachment(

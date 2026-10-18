@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     artifact_bucket: str = ""
     food_agent_mode: Literal["demo", "gemini"] | None = None
     food_search_enabled: bool = True
+    food_max_llm_calls: int = Field(default=10, ge=1, le=30)
     food_timeout_seconds: int = Field(default=120, ge=10, le=300)
     agent_session_backend: Literal["memory", "sqlite"] = "sqlite"
     agent_session_db_path: Path = BACKEND_DIR / ".data" / "agent_sessions.db"

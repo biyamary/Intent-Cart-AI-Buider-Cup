@@ -123,6 +123,10 @@ constraints and grounding propagation in mind when adding tools.
   code and retry advice. Food has `FOOD_TIMEOUT_SECONDS=120` by default; Shop a
   Look has `STYLIST_TIMEOUT_SECONDS=120`. Errors name the relevant assistant
   instead of always referring to a stylist.
+- Each turn has a model-call budget (`FOOD_MAX_LLM_CALLS=10`,
+  `STYLIST_MAX_LLM_CALLS=12`). The last allowed call runs with function calling
+  disabled, so a turn that spends its budget on research still ends with an
+  answer built from the evidence it gathered rather than an error.
 - The blocking compatibility route retains its historical HTTP error response.
   Its clients must render either that response or the refreshed transcript, not
   both. The server never returns raw SDK errors, secrets or internal thoughts.

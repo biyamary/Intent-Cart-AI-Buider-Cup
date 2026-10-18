@@ -26,7 +26,7 @@ export interface TurnStatus {
   progress: { stage: TurnStage; label: string }
   created_at: number
   updated_at: number
-  error: { code: string; message: string } | null
+  error: { code: string; message: string; diagnostic_id?: string | null } | null
   retry: RetryAdvice | null
 }
 
