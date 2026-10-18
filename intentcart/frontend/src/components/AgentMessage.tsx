@@ -4,13 +4,21 @@ import { safeWebUrl, type ChatMessage } from '../lib/conversations'
 
 const searchFramePolicy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'">`
 
-export function AgentMessage({ message }: { message: ChatMessage }) {
+export function AgentMessage({
+  message,
+  agentName = 'IntentCart assistant',
+  icon,
+}: {
+  message: ChatMessage
+  agentName?: string
+  icon?: React.ReactNode
+}) {
   const fromUser = message.role === 'user'
   return (
     <article className={`chat-message ${fromUser ? 'from-user' : 'from-assistant'}`}>
       <div className="message-author">
-        {!fromUser && <Sparkles size={14} />}
-        <strong>{fromUser ? 'You' : 'IntentCart stylist'}</strong>
+        {!fromUser && (icon || <Sparkles size={14} />)}
+        <strong>{fromUser ? 'You' : agentName}</strong>
         <time dateTime={new Date(message.created_at * 1000).toISOString()}>
           {new Date(message.created_at * 1000).toLocaleTimeString([], {
             hour: '2-digit',

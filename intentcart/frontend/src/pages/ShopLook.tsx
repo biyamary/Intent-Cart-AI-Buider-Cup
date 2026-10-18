@@ -149,7 +149,7 @@ export function ShopLook() {
               <p className="chat-loading">Tell your stylist about the occasion to get started.</p>
             )}
             {messages.map((message) => (
-              <AgentMessage key={message.id} message={message} />
+              <AgentMessage key={message.id} message={message} agentName="IntentCart stylist" />
             ))}
             {pendingText && (
               <>

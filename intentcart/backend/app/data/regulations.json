@@ -1,1 +1,59 @@
-[]
+[
+  {
+    "additive_id": "E1520", "country": "US", "status": "restricted",
+    "condition": "Federal rule for propylene glycol: ingredient specifications and good manufacturing practice apply. Maximum levels as served vary by food category; the limit is 2% for categories not separately listed. Alcoholic beverages, confections/frostings, frozen dairy products, seasonings/flavorings and nuts have their own listed limits. The label alone does not establish this product's category or concentration.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-184.1666",
+    "quote_or_snippet": "2.0 percent for all other food categories.",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E171", "country": "EU", "status": "banned",
+    "condition": "Food additive authorization withdrawn by Regulation (EU) 2022/63. The transition ended 2022-08-07; products already placed on the market could remain until their minimum durability/use-by date. Medicinal uses are a separate scope.",
+    "source_url": "https://eur-lex.europa.eu/eli/reg/2022/63/oj",
+    "corroborating_url": "https://cot.food.gov.uk/print/pdf/node/11291",
+    "reviewed_at": "2026-10-18", "effective_from": "2022-08-07", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E171", "country": "UK", "status": "restricted",
+    "condition": "Territorial divergence: authorized in Great Britain; not authorized for food manufacture in Northern Ireland. Qualifying GB retail goods can have separate movement arrangements; this is not a UK-wide ban or unconditional permission.",
+    "source_url": "https://cot.food.gov.uk/print/pdf/node/11291",
+    "quote_or_snippet": "It currently remains authorised in Great Britain.",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E171", "country": "US", "status": "restricted",
+    "condition": "Federal food colour use: at most 1% by weight, subject to 21 CFR 73.575 and applicable standards of identity. Quantity is not supplied by the ingredient list.",
+    "source_url": "https://www.hfpappexternal.fda.gov/scripts/fdcc/index.cfm?id=TitaniumDioxide&set=ColorAdditives",
+    "quote_or_snippet": "Foods generally, NTE 1 percent (by wt.)",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E924a", "country": "US", "status": "restricted",
+    "condition": "Federal bromated-flour standard: at most 50 ppm in finished bromated flour, only where baking qualities improve. Other uses and state requirements need separate review.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-137.155",
+    "quote_or_snippet": "potassium bromate is added in a quantity not exceeding 50 parts to each million parts of the finished bromated flour",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E924a", "country": "India", "status": "banned",
+    "condition": "FSSAI withdrew potassium bromate as a permitted food additive; the cited direction says its use as an additive in any food is not allowed.",
+    "source_url": "https://www.fssai.gov.in/upload/advisories/2018/03/5a9798d176f6a240.pdf",
+    "quote_or_snippet": "use of Potassium bromate as an additive in any food is not allowed",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E127", "country": "US", "status": "restricted",
+    "condition": "Federal food authorization is being withdrawn. Food manufacturers have until 2027-01-15 to reformulate; the ingested-drug deadline is different. This is a transition, not an unconditional permission.",
+    "source_url": "https://www.fda.gov/industry/color-additives/fdc-red-no-3",
+    "quote_or_snippet": "January 15, 2027",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  },
+  {
+    "additive_id": "E443", "country": "US", "status": "banned",
+    "condition": "FDA revoked authorization for BVO in food; the compliance transition ended on 2025-08-02.",
+    "source_url": "https://www.fda.gov/food/food-additives-petitions/brominated-vegetable-oil-bvo",
+    "quote_or_snippet": "The FDA no longer allows for the use of brominated vegetable oil (BVO) in food.",
+    "effective_from": "2025-08-02",
+    "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+  }
+]

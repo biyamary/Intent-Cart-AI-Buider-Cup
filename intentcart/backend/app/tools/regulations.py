@@ -1,37 +1,64 @@
 import json
-import re
+from datetime import date
 from pathlib import Path
 
-from app.schemas import RegulatoryAlert
+from app.schemas import Ingredient, RegulatoryAlert
+from app.tools.food_fetch import authority_url
+from app.tools.ingredients import normalize_ingredients
+
+CORPUS = json.loads((Path(__file__).parents[1] / "data" / "regulations.json").read_text())
 
 
-def lookup_regulations(ingredients: list[str], countries: list[str]) -> list[RegulatoryAlert]:
-    """Only reviewed source-backed entries may produce a non-unknown status."""
-    corpus = json.loads((Path(__file__).parents[1] / "data" / "regulations.json").read_text())
-    alerts = []
+def lookup_regulations(
+    ingredients: list[Ingredient] | list[str], countries: list[str], *, on_date: date | None = None
+) -> list[RegulatoryAlert]:
+    """Complete matrix; absent, stale or future entries always remain unverified."""
+    today = on_date or date.today()
+    if ingredients and isinstance(ingredients[0], str):
+        ingredients = normalize_ingredients(ingredients)
+    findings = []
     for ingredient in ingredients:
-        additives = re.findall(r"\bE\s*[- ]?\s*(\d{3,4}[a-z]?)\b", ingredient, re.I)
-        for code in dict.fromkeys("E" + x.upper() for x in additives):
-            for country in dict.fromkeys(countries):
-                entry = next(
-                    (x for x in corpus if x["additive_id"] == code and x["country"] == country),
-                    None,
-                )
-                reviewed = bool(
-                    entry
-                    and entry.get("reviewed_at")
-                    and str(entry.get("source_url", "")).startswith("https://")
-                )
-                alerts.append(
-                    RegulatoryAlert(
-                        ingredient=code,
-                        country=country,
-                        **(
-                            {k: entry[k] for k in ("status", "condition", "source_url")}
-                            | {"verified": True}
-                            if reviewed
-                            else {}
-                        ),
+        for country in dict.fromkeys(countries):
+            finding = RegulatoryAlert(ingredient=ingredient.canonical, country=country)
+            entry = next(
+                (
+                    e
+                    for e in CORPUS
+                    if e["additive_id"] == ingredient.additive_id and e["country"] == country
+                ),
+                None,
+            )
+            if entry:
+                try:
+                    reviewed = date.fromisoformat(entry["reviewed_at"])
+                    expires = date.fromisoformat(entry["review_after"])
+                    effective = date.fromisoformat(
+                        entry.get("effective_from", entry["reviewed_at"])
                     )
-                )
-    return alerts
+                    valid = reviewed <= today < expires and effective <= today
+                    valid = valid and authority_url(entry["source_url"], country)
+                except (ValueError, KeyError):
+                    valid = False
+                if valid:
+                    finding = RegulatoryAlert(
+                        ingredient=ingredient.canonical,
+                        country=country,
+                        verified=True,
+                        verification="reviewed",
+                        checked_at=entry["reviewed_at"],
+                        **{
+                            k: v
+                            for k, v in entry.items()
+                            if k
+                            in {
+                                "status",
+                                "condition",
+                                "source_url",
+                                "quote_or_snippet",
+                                "effective_from",
+                                "review_after",
+                            }
+                        },
+                    )
+            findings.append(finding)
+    return findings

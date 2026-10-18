@@ -8,6 +8,9 @@ yet a tool the agent can edit. Reference-image input is a future extension.
 
 Keep the existing backend `.env` and set:
 
+For Vertex AI, follow [local ADC setup](vertex-ai.md) and use its provider settings
+instead of the API key below. The agent mode and search settings apply to both providers.
+
 ```dotenv
 AGENT_MODE=demo
 STYLIST_AGENT_MODE=gemini

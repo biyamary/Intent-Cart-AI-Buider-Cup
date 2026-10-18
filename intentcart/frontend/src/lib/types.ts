@@ -1,4 +1,13 @@
-export const countries = ['India', 'EU', 'US', 'UK', 'UAE'] as const
+export const countries = [
+  'EU',
+  'UK',
+  'India',
+  'US',
+  'Canada',
+  'Australia/NZ',
+  'Japan',
+  'UAE',
+] as const
 export type Country = (typeof countries)[number]
 export const categories = [
   'outfit',
@@ -12,6 +21,7 @@ export const categories = [
 export type Category = (typeof categories)[number]
 export interface Profile {
   country: Country
+  food_countries?: Country[]
   age_group: 'unspecified' | 'child' | 'teen' | 'adult'
   allergies: string[]
   diet: string[]
@@ -24,12 +34,39 @@ export interface Profile {
 }
 export interface FoodReport {
   product: { name: string; source: string; barcode: string | null; source_url: string | null }
-  ingredients: { raw: string; canonical: string; role: string; explanation: string }[]
+  ingredients: {
+    raw: string
+    canonical: string
+    role: string
+    explanation: string
+    additive_id?: string | null
+    source_url?: string | null
+    purpose_basis?: 'reviewed' | 'label' | 'citation_verified' | 'unverified'
+    iarc?: {
+      group: string
+      label: string
+      context: string
+      source_url: string
+      evaluated_year: number
+    } | null
+  }[]
   allergy_alerts: {
     allergen: string
     matched_ingredient: string
     type: 'contains' | 'may_contain'
   }[]
+  label_allergens?: FoodReport['allergy_alerts']
+  profile_context?: Pick<Profile, 'allergies' | 'diet' | 'age_group'>
+  research?: {
+    status: 'not_needed' | 'disabled' | 'completed' | 'partial' | 'unavailable'
+    total_gaps: number
+    cache_hits: number
+    attempted: number
+    verified: number
+    deferred: number
+    failure_reason: string | null
+    message: string
+  }
   regulatory_alerts: {
     ingredient: string
     country: Country
@@ -37,6 +74,9 @@ export interface FoodReport {
     condition: string
     source_url: string | null
     verified: boolean
+    verification?: 'reviewed' | 'citation_verified' | 'unverified'
+    quote_or_snippet?: string
+    checked_at?: string | null
   }[]
   diet_conflicts: Record<string, string>[]
   age_notes: Record<string, string>[]

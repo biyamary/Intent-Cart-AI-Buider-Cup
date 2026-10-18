@@ -1,18 +1,23 @@
 import { lazy, Suspense, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { MessageSquare, ScanLine } from 'lucide-react'
 import { api, post } from '../lib/api'
 import type { Scan } from '../lib/types'
 import { PageTitle, ErrorMessage } from '../components/Feedback'
 import { IngredientEditor } from '../components/IngredientEditor'
 import { ReportCard } from '../components/ReportCard'
 import { ChatPanel } from '../components/ChatPanel'
+const FoodChat = lazy(() =>
+  import('../components/FoodChat').then((module) => ({ default: module.FoodChat })),
+)
 const Scanner = lazy(() =>
   import('../components/Scanner').then((module) => ({ default: module.Scanner })),
 )
 
 export function FoodCheck() {
   const cache = useQueryClient()
+  const [viewMode, setViewMode] = useState<'chat' | 'scanner'>('chat')
   const [tab, setTab] = useState<'text' | 'barcode' | 'photo'>('text')
   const [name, setName] = useState('')
   const [text, setText] = useState('')
@@ -41,14 +46,42 @@ export function FoodCheck() {
     },
     onSuccess: accept,
   })
+
   return (
     <>
-      <PageTitle
-        eyebrow="THE FOOD COMPANION"
-        title="A closer look at your label."
-        description="Start with the ingredients. Confirm what you see. Get a review shaped by your saved preferences."
-      />
-      <div className="workspace">
+      <div className="tabs" style={{ marginBottom: '20px', display: 'flex', gap: '8px' }}>
+        <button
+          type="button"
+          aria-pressed={viewMode === 'chat'}
+          className={viewMode === 'chat' ? 'selected' : ''}
+          onClick={() => setViewMode('chat')}
+        >
+          <MessageSquare size={15} style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline' }} />
+          Chat with Food Companion
+        </button>
+        <button
+          type="button"
+          aria-pressed={viewMode === 'scanner'}
+          className={viewMode === 'scanner' ? 'selected' : ''}
+          onClick={() => setViewMode('scanner')}
+        >
+          <ScanLine size={15} style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline' }} />
+          Barcode &amp; Photo Scanner
+        </button>
+      </div>
+
+      {viewMode === 'chat' ? (
+        <Suspense fallback={<p className="chat-loading">Loading your food companion…</p>}>
+          <FoodChat onSwitchToScanner={() => setViewMode('scanner')} />
+        </Suspense>
+      ) : (
+        <>
+          <PageTitle
+            eyebrow="LABEL SCANNER"
+            title="Scan or enter your label."
+            description="Type, scan barcodes, or upload a photo to generate an instant structured report."
+          />
+          <div className="workspace">
         <div className="stack">
           {!scan ? (
             <form
@@ -181,6 +214,12 @@ export function FoodCheck() {
                 scan.report && (
                   <>
                     <ReportCard report={scan.report} />
+                    <button
+                      className="text-button"
+                      onClick={() => setScan({ ...scan, status: 'awaiting_confirmation' })}
+                    >
+                      Edit ingredients &amp; run review again
+                    </button>
                     <ChatPanel key={scan.id} scanId={scan.id} />
                   </>
                 )
@@ -221,7 +260,9 @@ export function FoodCheck() {
             product is suitable for you.
           </p>
         </aside>
-      </div>
+          </div>
+        </>
+      )}
     </>
   )
 }

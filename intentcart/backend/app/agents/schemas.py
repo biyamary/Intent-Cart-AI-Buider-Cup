@@ -1,4 +1,8 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+from app.schemas import Country, RegulatoryStatus
 
 
 class ExtractedLabel(BaseModel):
@@ -16,6 +20,23 @@ class Explanation(BaseModel):
 class FollowUp(BaseModel):
     answer: str
     sources: list[str] = Field(default_factory=list)
+
+
+class ResearchFinding(BaseModel):
+    ingredient: str = Field(max_length=200)
+    kind: Literal["regulation", "purpose"] = "regulation"
+    country: Country | None = None
+    status: RegulatoryStatus = "unverified"
+    condition: str = Field(default="", max_length=2000)
+    purpose: str = Field(default="", max_length=300)
+    quote_or_snippet: str = Field(default="", max_length=1200)
+    url: str = Field(default="", max_length=2048)
+    effective_from: str | None = Field(default=None, max_length=10)
+    review_after: str | None = Field(default=None, max_length=10)
+
+
+class ResearchResults(BaseModel):
+    findings: list[ResearchFinding] = Field(default_factory=list, max_length=40)
 
 
 class ParsedBrief(BaseModel):

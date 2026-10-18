@@ -24,7 +24,7 @@ export default function App() {
   const health = useQuery({
     queryKey: ['health'],
     queryFn: () =>
-      api<{ agent_mode: string; stylist_agent_mode: string; auth_mode: string }>('/health'),
+      api<{ agent_mode: string; stylist_agent_mode: string; food_agent_mode: string; auth_mode: string }>('/health'),
     retry: 1,
   })
   useEffect(() => {
@@ -66,8 +66,8 @@ export default function App() {
         {health.isError
           ? 'API unavailable · Start the backend on port 8000'
           : health.data
-            ? health.data.stylist_agent_mode === 'gemini'
-              ? 'Shop a look · Gemini with Google Search'
+            ? health.data.food_agent_mode === 'gemini' || health.data.stylist_agent_mode === 'gemini'
+              ? 'Conversational Agents · Gemini with Search & Evidence'
               : health.data.agent_mode === 'demo'
                 ? 'Local demo · Sample data and placeholder AI responses'
                 : 'Gemini mode · Prompts and integrations require configuration'

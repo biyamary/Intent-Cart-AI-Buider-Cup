@@ -3,14 +3,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from app.agents.food_agent import (
     create_extraction_agent,
     create_followup_agent,
-    create_report_agent,
 )
-from app.agents.schemas import Explanation, ExtractedLabel, FollowUp
+from app.agents.food_pipeline import acceptable_prose, report_sources
+from app.agents.schemas import ExtractedLabel, FollowUp
 from app.auth import current_user
 from app.dependencies import get_store, owned_record, profile_for
 from app.memory.store import Store
 from app.schemas import Answer, ConfirmIngredients, ExtractRequest, ProductLabel, Question, Scan
-from app.tools.food import build_report, split_label
+from app.tools.food import split_label
 from app.tools.open_food_facts import lookup_barcode
 
 router = APIRouter(prefix="/food", tags=["food"])
@@ -106,15 +106,7 @@ async def analyze(
 ):
     scan = Scan.model_validate(await owned_record(store, uid, "scans", scan_id))
     profile = await profile_for(store, uid)
-    report = build_report(scan, body, profile)
-    if request.app.state.settings.agent_mode == "gemini":
-        explanation = await request.app.state.agents.run(
-            create_report_agent(request.app.state.settings),
-            uid,
-            {"report": report.model_dump(mode="json"), "profile": profile.model_dump()},
-            Explanation,
-        )
-        report.summary = explanation.summary
+    report = await request.app.state.food_pipeline.analyze(scan, body, profile, uid)
     scan.ingredients, scan.contains, scan.may_contain = (
         body.ingredients,
         body.contains,
@@ -138,21 +130,32 @@ async def ask(
     settings = request.app.state.settings
     if settings.agent_mode == "demo":
         return Answer(
-            answer="Follow-up generation is a placeholder. The saved report is available above; this demo cannot answer additional food or health questions.",
+            answer="Live follow-up is disabled. " + scan.report.summary,
+            sources=sorted(report_sources(scan.report)),
             mode="demo",
         )
     profile = await profile_for(store, uid)
+    allowed = report_sources(scan.report)
+    food_profile = profile.model_dump(
+        include={"age_group", "allergies", "diet", "country", "food_countries"}
+    )
     result = await request.app.state.agents.run(
         create_followup_agent(settings),
         uid,
         {
             "question": body.question,
             "report": scan.report.model_dump(mode="json"),
-            "profile": profile.model_dump(),
+            "profile": food_profile,
+            "profile_changed": food_profile != scan.report.profile_context,
+            "allowed_sources": sorted(allowed),
         },
         FollowUp,
     )
-    allowed = {alert.source_url for alert in scan.report.regulatory_alerts if alert.verified}
+    if not acceptable_prose(result.answer):
+        return Answer(
+            answer="The saved evidence does not establish individual suitability. Review the findings and their source conditions above.",
+            mode="gemini",
+        )
     return Answer(
         answer=result.answer,
         sources=[url for url in result.sources if url in allowed],

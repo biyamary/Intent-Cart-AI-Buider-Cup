@@ -88,10 +88,11 @@ class ConversationService:
         return session
 
     def summary(self, agent_id: str, session) -> ConversationSummary:
+        default_title = "New review" if agent_id == "food" else "New look"
         return ConversationSummary(
             id=session.id,
             agent_id=agent_id,
-            title=session.state.get("chat:title", "New look"),
+            title=session.state.get("chat:title", default_title),
             updated_at=session.last_update_time,
         )
 
@@ -115,11 +116,12 @@ class ConversationService:
     async def create(self, agent_id: str, uid: str) -> Conversation:
         self.require_enabled(agent_id)
         registration = self.registration(agent_id)
+        default_title = "New review" if agent_id == "food" else "New look"
         session = await self.sessions.create_session(
             app_name=registration.app_name,
             user_id=uid,
             session_id=uuid4().hex,
-            state={"chat:title": "New look"},
+            state={"chat:title": default_title},
         )
         return Conversation(**self.summary(agent_id, session).model_dump())
 
@@ -128,9 +130,22 @@ class ConversationService:
     ) -> Conversation:
         self.require_enabled(agent_id)
         key = (agent_id, uid, session_id)
+        # region agent log
+        def _agent_dbg(hypothesis_id, location, message, **data):
+            import json, time
+            with open(r"c:\code\Intent-Cart-AI-Buider-Cup\debug-d1c5c0.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"d1c5c0","runId":"pre-fix","hypothesisId":hypothesis_id,"location":location,"message":message,"data":data,"timestamp":int(time.time()*1000)})+"\n")
+        # endregion
         if key in self._active:
+            # region agent log
+            _agent_dbg("D", "conversations.py:send", "blocked_active_turn", agent_id=agent_id, active_count=len(self._active))
+            # endregion
             raise HTTPException(409, "A reply is already in progress for this conversation.")
         self._active.add(key)
+        # region agent log
+        _agent_dbg("B", "conversations.py:send", "turn_start", agent_id=agent_id, timeout_s=self.settings.agent_timeout_seconds, text_len=len(body.text), active_count=len(self._active))
+        started = __import__("time").perf_counter()
+        # endregion
         try:
             session = await self.get_session(agent_id, uid, session_id)
             request_id = str(body.request_id)
@@ -144,8 +159,9 @@ class ConversationService:
                 sum(event.author == "user" for event in session.events)
                 >= self.settings.agent_max_conversation_turns
             ):
+                item_name = "review" if agent_id == "food" else "look"
                 raise HTTPException(
-                    409, "This conversation has reached its limit. Start a new look to continue."
+                    409, f"This conversation has reached its limit. Start a new {item_name} to continue."
                 )
             registration = self.registration(agent_id)
             runner = self.runner(agent_id)
@@ -153,7 +169,7 @@ class ConversationService:
                 "chat:request_id": request_id,
                 "temp:profile": registration.profile_context(profile),
             }
-            if session.state.get("chat:title") == "New look":
+            if session.state.get("chat:title") in ("New look", "New review"):
                 state_delta["chat:title"] = body.text[:80]
             try:
                 async with asyncio.timeout(self.settings.agent_timeout_seconds):
@@ -183,6 +199,9 @@ class ConversationService:
                 raise
             except Exception as error:
                 failure = describe_agent_error(error)
+                # region agent log
+                _agent_dbg("B", "conversations.py:send", "turn_failed", agent_id=agent_id, error_type=type(error).__name__, status=failure.status, reason=failure.reason, elapsed_s=round(__import__("time").perf_counter()-started, 2), detail_prefix=failure.detail[:40])
+                # endregion
                 # No exception text, prompts, API keys, URLs or user content in logs.
                 logger.warning(
                     "Agent turn failed: agent=%s error_type=%s status=%s reason=%s retry_after=%s",
@@ -199,9 +218,15 @@ class ConversationService:
                     else None
                 )
                 raise HTTPException(failure.status, failure.detail, headers=headers) from None
+            # region agent log
+            _agent_dbg("B", "conversations.py:send", "turn_ok", agent_id=agent_id, elapsed_s=round(__import__("time").perf_counter()-started, 2), has_answer=True)
+            # endregion
             return await self.get(agent_id, uid, session_id)
         finally:
             self._active.discard(key)
+            # region agent log
+            _agent_dbg("D", "conversations.py:send", "turn_unlocked", agent_id=agent_id, active_count=len(self._active))
+            # endregion
 
     async def record_failure(
         self, agent_id: str, uid: str, session_id: str, request_id: str, detail: str

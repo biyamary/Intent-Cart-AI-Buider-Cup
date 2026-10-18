@@ -1,6 +1,6 @@
 # IntentCart scaffold
 
-A shopping assistant with two flows: **Food label review** and **Shop a look**. The stylist supports real Google ADK conversations with optional Google Search, currently disabled by default. Food generation and structured look-board integrations remain scaffold placeholders.
+A shopping assistant with two flows: **Food label review** and **Shop a look**. Food reviews combine deterministic ingredient/profile checks, source-backed regulation and IARC data, optional gap research, citation verification, and grounded follow-ups. The stylist supports Google ADK conversations with optional Google Search. Structured look-board integrations remain scaffold placeholders.
 
 The architecture document is used as product context. Your request takes precedence: **Google ADK replaces LangGraph**, and all model steps use configurable Gemini models. No cloud resources were created or deployed.
 
@@ -34,13 +34,13 @@ npm run dev
 
 No API keys are needed for the sample board and Food demo. Demo auth uses **one shared local user**; profile/board data stays in process memory and resets when the API restarts. Chat history uses a separate local SQLite store by default. Run one API worker locally. Do not expose demo auth as a private multi-user service.
 
-For live **Shop a look**, add `STYLIST_AGENT_MODE=gemini` and your server-side `GOOGLE_API_KEY` to `backend/.env`, keeping `AGENT_MODE=demo` if Food should remain a demo. Restart the API and open Clothes. See [conversational agents](docs/agents.md) for architecture, configuration, and the live smoke test.
+For live **Shop a look**, add `STYLIST_AGENT_MODE=gemini` and configure [Vertex AI with local ADC](docs/vertex-ai.md) or a server-side `GOOGLE_API_KEY` in `backend/.env`, keeping `AGENT_MODE=demo` if Food should remain a demo. Restart the API and open Clothes. See [conversational agents](docs/agents.md) for architecture, configuration, and the live smoke test.
 
 Keep `STYLIST_SEARCH_ENABLED=false` for conversational styling without browsing. To enable Google Search later, choose a compatible model/project with available grounding quota, set `STYLIST_SEARCH_ENABLED=true`, and restart the backend.
 
 ## Try the flows
 
-**Food:** save `milk, peanut` as allergies in My profile → Food → Try a sample label → Review ingredients → edit and confirm the ingredient, contains, and may-contain fields → review keyword matches and unverified regulatory entries → ask a follow-up (explicit placeholder response). Recent labels can be reopened.
+**Food:** save `milk, peanut` as allergies in My profile → Food → Try a sample label → Review ingredients → edit and confirm the ingredient, contains, and may-contain fields → review purposes, IARC context and the country matrix. Recent labels can be reopened. Set `AGENT_MODE=gemini` for gap research and evidence-grounded follow-ups. See [food agent setup and evidence limits](docs/food-agent.md).
 
 **Shop a look:** say “I want an outfit for my sister's mehendi” → answer the stylist's questions → provide a budget and preferences → get outfit ideas and budget targets → refine the suggestions in conversation. Chats can be resumed from the sidebar. Text input is supported; reference images come later. Live product search is available when explicitly enabled.
 
@@ -54,11 +54,11 @@ Prices are integer paise in the API; ₹6,000 is `600000`. The backend recompute
 | --- | --- |
 | React / Vite / TypeScript / Tailwind | Responsive Home, Food, Clothes, Profile; loading/error states; React Query and Zustand |
 | FastAPI | Typed REST contracts, OpenAPI, user-scoped records, confirmation boundaries, same-origin static serving |
-| Google ADK + Gemini | Conversational stylist with optional native Google Search; shared agent factory/registry, persistent sessions, limits and grounding. Five earlier structured step prompts remain placeholders |
-| Food text | Basic parser, editable confirmation, limited deterministic allergen keyword matching, structured report and scan history |
+| Google ADK + Gemini | Conversational stylist; food extraction, research, structured reporting and QA; shared agent factory, sessions and limits |
+| Food text | Editable confirmation, alias/E-number normalization, deterministic allergen/diet matches, scoped age notes, structured report and scan history |
 | Food barcode | ZXing camera component; opt-in Open Food Facts adapter, with text fallback |
-| Food photo | Validated upload route wired to an ADK extraction agent; disabled until its prompt and Gemini credentials are supplied |
-| Food evidence | Empty regulation corpus; E-number findings remain unverified. Ingredient explanations, normalization beyond lowercasing, diet checks, and age notes are placeholders |
+| Food photo | Validated upload route and transcription prompt; requires Gemini credentials, then user confirmation |
+| Food evidence | Reviewed regulation/IARC seeds, country matrix, hard-allowlisted fetch, Google Search via AgentTool, citation checks and expiring Firestore/memory evidence cache. Missing evidence remains unverified |
 | Clothes | Checklist confirmation; deterministic allocation; 14 illustrative seed products; lock/swap/owned/remove; final totals |
 | Clothes discovery | Stylist suggests outfit ideas and can search/cite sources when search is enabled. Structured product discovery/ranking, board mutation tools and reference-image interpretation are future extensions |
 | Auth / memory | Working local adapter; Firebase token verification, Google sign-in, and Firestore adapters included but not cloud-tested |
@@ -80,11 +80,12 @@ intentcart/
       routers/                # profile, food, clothes
       agents/
         llm.py                # ADK LlmAgent factory and model selection
-        food_agent.py         # Extract / report / follow-up agents
+        food_agent.py         # Extract / research / report / follow-up agents
+        food_pipeline.py      # Deterministic checks, research, verification and caching
         stylist_agent.py      # Brief / final-note agents
         runtime.py            # Shared ADK Runner + temporary sessions
         schemas.py            # Model output contracts
-        prompts/              # TODO_PROMPT Markdown files
+        prompts/              # Agent instructions; unfinished look-board steps retain TODO_PROMPT
       tools/                  # Label matching, regulations, OFF, products, budget
       memory/store.py         # Store protocol, memory and Firestore adapters
       data/                   # Allergen examples, empty rules, sample catalog
@@ -104,8 +105,8 @@ intentcart/
 
 ## Connect the real services
 
-1. The new `stylist_conversation.md` prompt is implemented. For the remaining structured steps, replace each relevant `TODO_PROMPT` in `backend/app/agents/prompts/`; unchanged markers return HTTP 501 before a model call.
-2. Set `GOOGLE_API_KEY`, `GEMINI_MODEL`, `GEMINI_LITE_MODEL`, and `AGENT_MODE=gemini` in `backend/.env`. The key stays on the server. Select explicit model IDs available to your project using the [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models); the default latest aliases are scaffolding conveniences and are not pinned model versions. Run a small smoke call after configuring prompts.
+1. Food and `stylist_conversation.md` prompts are implemented. For the remaining structured look-board steps, replace each relevant `TODO_PROMPT` in `backend/app/agents/prompts/`; unchanged markers return HTTP 501 before a model call.
+2. Configure [Vertex AI with ADC](docs/vertex-ai.md), or set `GOOGLE_API_KEY` for the Gemini Developer API. Set `GEMINI_MODEL`, `GEMINI_LITE_MODEL`, and `AGENT_MODE=gemini` in `backend/.env`. Credentials stay on the server. Select explicit model IDs available to your project and provider; the default latest aliases are scaffolding conveniences and are not pinned model versions. Run a small smoke call after configuring prompts.
 3. For barcode lookup, set `ENABLE_OPEN_FOOD_FACTS=true` and a real contact in `OPEN_FOOD_FACTS_USER_AGENT`. Review [Open Food Facts API requirements](https://openfoodfacts.github.io/openfoodfacts-server/api/) and its data licensing before publishing.
 4. For Firebase, enable Google sign-in and Firestore, set `GOOGLE_CLOUD_PROJECT`, `AUTH_MODE=firebase`, `STORE_BACKEND=firestore`, and use Application Default Credentials. Configure the matching `VITE_FIREBASE_*` values and `VITE_AUTH_MODE=firebase` in `frontend/.env`. Add the frontend origin to Firebase's authorized domains. The backend uses the Admin SDK; direct client database access is denied by `firestore.rules`.
 5. Populate and review the reference data, then implement the remaining adapters listed in [implementation-todos.md](docs/implementation-todos.md). Gemini explanations are not a replacement for deterministic checks or reviewed evidence.

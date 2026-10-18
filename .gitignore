@@ -16,3 +16,4 @@ coverage/
 .sites-runtime/
 *.log
 *.tsbuildinfo
+temp_pytest/

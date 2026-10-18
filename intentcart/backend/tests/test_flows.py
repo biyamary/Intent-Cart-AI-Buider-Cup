@@ -45,9 +45,9 @@ def test_food_confirmation_report_and_followup(client):
         ("milk", "contains"),
         ("peanut", "may_contain"),
     }
-    assert len(report["regulatory_alerts"]) == 3
+    assert len(report["regulatory_alerts"]) == 12
     assert all(
-        a["status"] == "unknown" and not a["verified"] and a["source_url"] is None
+        a["status"] == "unverified" and not a["verified"] and a["source_url"] is None
         for a in report["regulatory_alerts"]
     )
     assert "safe" not in report["summary"].lower()
@@ -202,6 +202,9 @@ def test_adk_factories_and_prompt_gate():
     assert agent.model == settings.gemini_model
     from fastapi import HTTPException
 
+    assert "TODO_PROMPT" not in str(agent.instruction)
+    # Preserve the runtime gate for any future unfinished agent without a network call.
+    agent.instruction = "TODO_PROMPT: unfinished test agent"
     with pytest.raises(HTTPException) as error:
         asyncio.run(AgentRuntime(settings).run(agent, "test-user", {}, Explanation))
     assert error.value.status_code == 501
@@ -219,6 +222,7 @@ def test_unknown_api_is_not_spa_html(client):
 
 def test_built_spa_routes_and_static_boundary(tmp_path):
     from fastapi.testclient import TestClient
+
     from app.main import create_app
 
     dist = tmp_path / "dist"

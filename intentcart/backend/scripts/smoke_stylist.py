@@ -5,7 +5,6 @@ Uses only a synthetic shopping brief; no saved user profiles or conversation dat
 """
 
 import asyncio
-import os
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -13,13 +12,14 @@ from google.adk.sessions import InMemorySessionService
 
 from app.agents.conversation_schemas import ChatRequest
 from app.agents.conversations import ConversationService
+from app.agents.google_client import configure_adk_environment
 from app.config import Settings
 from app.schemas import Profile
 
 
 async def main():
     settings = Settings(stylist_agent_mode="gemini", agent_session_backend="memory")
-    os.environ["GOOGLE_API_KEY"] = settings.google_api_key.get_secret_value()
+    configure_adk_environment(settings)
     service = ConversationService(settings, InMemorySessionService())
     search_enabled = settings.stylist_search_enabled
     print(f"Google Search enabled: {search_enabled}", flush=True)

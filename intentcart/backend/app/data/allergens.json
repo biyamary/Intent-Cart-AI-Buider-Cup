@@ -1,8 +1,8 @@
 {
   "milk": ["milk", "whey", "casein", "caseinate", "butter", "ghee"],
   "peanut": ["peanut", "peanuts", "groundnut", "groundnuts"],
-  "soy": ["soy", "soya", "soybean", "soybeans"],
-  "wheat": ["wheat", "semolina"],
+  "soy": ["soy", "soya", "soybean", "soybeans", "soyabean", "soyabeans"],
+  "wheat": ["wheat", "semolina", "maida"],
   "egg": ["egg", "eggs", "albumen"],
   "sesame": ["sesame", "tahini"]
 }

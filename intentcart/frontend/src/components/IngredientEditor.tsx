@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { post } from '../lib/api'
-import { commaList, countries, type Country, type Scan } from '../lib/types'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { api, post } from '../lib/api'
+import { commaList, countries, type Country, type Profile, type Scan } from '../lib/types'
 import { ErrorMessage } from './Feedback'
 
 export function IngredientEditor({
@@ -14,7 +14,18 @@ export function IngredientEditor({
   const [ingredients, setIngredients] = useState(scan.ingredients.join('\n'))
   const [contains, setContains] = useState(scan.contains.join(', '))
   const [traces, setTraces] = useState(scan.may_contain.join(', '))
-  const [regions, setRegions] = useState<Country[]>(['India', 'EU', 'US'])
+  const profile = useQuery({ queryKey: ['profile'], queryFn: () => api<Profile>('/profile') })
+  const [chosenRegions, setRegions] = useState<Country[] | null>(
+    scan.report?.regulatory_alerts.length
+      ? [...new Set(scan.report.regulatory_alerts.map((row) => row.country))]
+      : null,
+  )
+  const defaults: Country[] = ['EU', 'UK', 'India', 'US']
+  const regions =
+    chosenRegions ??
+    (profile.data?.food_countries?.length
+      ? profile.data.food_countries
+      : [...new Set([...defaults, ...(profile.data ? [profile.data.country] : [])])])
   const mutation = useMutation({
     mutationFn: () =>
       post<Scan>(`/food/scans/${scan.id}/analyze`, {
@@ -25,7 +36,7 @@ export function IngredientEditor({
           .filter(Boolean),
         contains: commaList(contains),
         may_contain: commaList(traces),
-        countries: regions,
+        countries: chosenRegions ?? undefined,
       }),
     onSuccess: onComplete,
   })

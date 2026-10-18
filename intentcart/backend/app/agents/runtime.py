@@ -1,14 +1,19 @@
 import asyncio
 import json
+import logging
 from uuid import uuid4
 
 from fastapi import HTTPException
+from google.adk.agents.run_config import RunConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
+from app.agents.errors import StructuredResponseError, describe_step_error, ensure_complete_response
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntime:
@@ -50,16 +55,40 @@ class AgentRuntime:
                     user_id=uid,
                     session_id=session_id,
                     new_message=types.Content(role="user", parts=parts),
+                    run_config=RunConfig(max_llm_calls=self.settings.agent_max_llm_calls),
                 ):
-                    if event.is_final_response() and event.content:
-                        final_text = "".join(part.text for part in event.content.parts if part.text)
+                    if event.author == agent.name:
+                        ensure_complete_response(event)
+                    if event.author == agent.name and event.is_final_response() and event.content:
+                        final_text = "".join(
+                            part.text
+                            for part in event.content.parts
+                            if part.text and not part.thought
+                        )
                 if not final_text:
-                    raise ValueError("Agent returned no structured final response")
+                    raise StructuredResponseError("empty_response")
+                # Research uses tools without output_schema for Gemini compatibility.
+                if final_text.strip().startswith("```"):
+                    final_text = final_text.strip().partition("\n")[2].rsplit("```", 1)[0]
                 return schema.model_validate_json(final_text)
-        except TimeoutError:
-            raise HTTPException(504, "The assistant timed out. Please retry.") from None
-        except Exception:
-            raise HTTPException(502, "The assistant could not produce a valid response.") from None
+        except Exception as error:  # noqa: BLE001 -- redact all SDK failures at the API boundary
+            failure = describe_step_error(error)
+            # Never log exception messages/tracebacks: provider payloads may contain
+            # credentials, uploaded image data, prompts or generated label text.
+            logger.warning(
+                "Agent step failed: agent=%s error_type=%s status=%s reason=%s retry_after=%s",
+                agent.name,
+                type(error).__name__,
+                failure.status,
+                failure.reason,
+                failure.retry_after,
+            )
+            headers = (
+                {"Retry-After": str(failure.retry_after)}
+                if failure.retry_after is not None
+                else None
+            )
+            raise HTTPException(failure.status, failure.detail, headers=headers) from None
         finally:
             await session_service.delete_session(
                 app_name=app_name, user_id=uid, session_id=session_id

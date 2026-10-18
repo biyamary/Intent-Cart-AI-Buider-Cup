@@ -180,18 +180,64 @@ def test_idempotency_and_user_isolation(chat_client):
     assert client.get(f"/api/agents/stylist/sessions/{session_id}").status_code == 404
     assert send(client, session_id, "Read that conversation").status_code == 404
     assert client.get("/api/agents/stylist/sessions").json() == []
-    assert client.post("/api/agents/food/sessions").status_code == 404
+    assert client.post("/api/agents/unknown-agent/sessions").status_code == 404
 
 
 def test_disabled_agent_and_invalid_inputs(client, chat_client):
     assert client.post("/api/agents/stylist/sessions").status_code == 503
-    assert client.get("/api/agents").json()[0]["enabled"] is False
+    assert client.post("/api/agents/food/sessions").status_code == 503
+    agents = client.get("/api/agents").json()
+    assert all(a["enabled"] is False for a in agents)
     live, model = chat_client
     session_id = new_session(live)
     assert send(live, session_id, "  ").status_code == 422
     assert send(live, session_id, "a" * 4001).status_code == 422
     assert send(live, session_id, "hello", "invalid-id").status_code == 422
     assert model._requests == []
+
+
+def test_food_chat_agent_session_and_profile_context():
+    with TestClient(
+        create_app(settings(food_agent_mode="gemini", food_search_enabled=True))
+    ) as client:
+        model = FakeGemini()
+        client.app.state.conversations.runner("food").agent.model = model
+        client.put(
+            "/api/profile",
+            json={
+                "country": "India",
+                "allergies": ["peanuts", "milk"],
+                "age_group": "child",
+                "food_countries": ["India", "EU", "US"],
+            },
+        )
+        info = next(a for a in client.get("/api/agents").json() if a["id"] == "food")
+        assert info["enabled"] is True
+        assert "google_search" in info["capabilities"]
+        assert "web_fetch" in info["capabilities"]
+
+        res = client.post("/api/agents/food/sessions")
+        assert res.status_code == 201
+        session_id = res.json()["id"]
+        assert res.json()["title"] == "New review"
+
+        reply = client.post(
+            f"/api/agents/food/sessions/{session_id}/messages",
+            json={
+                "text": "Hi! Can you check the ingredients: wheat flour, sugar, E102, palm oil",
+                "request_id": str(uuid4()),
+            },
+        )
+        assert reply.status_code == 200
+        messages = reply.json()["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
+
+        req = model._requests[-1]
+        instruction = str(req.config.system_instruction)
+        assert "peanuts" in instruction
+        assert "child" in instruction
 
 
 @pytest.mark.parametrize(

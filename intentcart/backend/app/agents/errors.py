@@ -4,7 +4,11 @@ import math
 import re
 from dataclasses import dataclass
 
+from google.auth.exceptions import GoogleAuthError
+from google.genai import types
 from google.genai.errors import ClientError
+from httpx import TransportError
+from pydantic import ValidationError
 
 
 @dataclass(frozen=True)
@@ -13,6 +17,35 @@ class AgentFailure:
     detail: str
     reason: str
     retry_after: int | None = None
+
+
+class StructuredResponseError(Exception):
+    """An application-owned response failure, with no model output attached."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def ensure_complete_response(response):
+    if response.finish_reason == types.FinishReason.MAX_TOKENS:
+        raise StructuredResponseError("response_truncated")
+    blocked = {
+        types.FinishReason.SAFETY,
+        types.FinishReason.RECITATION,
+        types.FinishReason.BLOCKLIST,
+        types.FinishReason.PROHIBITED_CONTENT,
+    }
+    if response.finish_reason in blocked or response.error_code in blocked:
+        raise StructuredResponseError("response_blocked")
+    if response.error_code:
+        raise StructuredResponseError("model_response_error")
+
+
+def validate_step_response(callback_context, llm_response):
+    # ADK can discard contentless responses or validate incomplete JSON before
+    # yielding a public event. Inspect finish reasons before those operations.
+    ensure_complete_response(llm_response)
 
 
 def _quota_failure(error: ClientError) -> AgentFailure:
@@ -54,7 +87,8 @@ def _quota_failure(error: ClientError) -> AgentFailure:
         return AgentFailure(
             429,
             "Gemini reports a quota limit of zero for this model. The app owner needs to "
-            "check the API project's model access and billing tier in Google AI Studio. "
+            "check the project's model access and billing tier in Google AI Studio "
+            "or Google Cloud Console (Vertex AI). "
             "Retrying immediately will not resolve a zero quota.",
             "quota_zero",
         )
@@ -65,7 +99,8 @@ def _quota_failure(error: ClientError) -> AgentFailure:
         return AgentFailure(
             429,
             "Gemini's daily quota for this model is exhausted. Wait for the daily quota "
-            "reset, or ask the app owner to review the project's limits in Google AI Studio.",
+            "reset, or ask the app owner to review the project's limits in Google AI Studio "
+            "or Google Cloud Console (Vertex AI).",
             "quota_daily",
         )
     if retry_after is not None:
@@ -73,7 +108,7 @@ def _quota_failure(error: ClientError) -> AgentFailure:
             429,
             f"Gemini is limiting requests. Wait at least {retry_after} seconds before sending "
             "a follow-up. If this continues, the app owner should check the project's model "
-            "quota in Google AI Studio.",
+            "quota in Google AI Studio or Google Cloud Console (Vertex AI).",
             "quota_retry",
             retry_after,
         )
@@ -81,13 +116,25 @@ def _quota_failure(error: ClientError) -> AgentFailure:
         429,
         "Gemini could not accept this request because of a quota or capacity limit. "
         "Try again later. If this continues, the app owner should check this model's "
-        "limits and billing tier for the API key's project in Google AI Studio. "
+        "limits and billing tier in Google AI Studio or Google Cloud Console (Vertex AI). "
         "Starting a new chat does not reset the quota.",
         "quota_unspecified",
     )
 
 
+def _adc_failure() -> AgentFailure:
+    return AgentFailure(
+        502,
+        "Google Cloud authentication failed. For local Vertex AI, run "
+        "gcloud auth application-default login and set the ADC quota project to "
+        "GOOGLE_CLOUD_PROJECT. Verify that the account has access to that project.",
+        "provider_auth",
+    )
+
+
 def describe_agent_error(error: Exception) -> AgentFailure:
+    if isinstance(error, GoogleAuthError):
+        return _adc_failure()
     if isinstance(error, TimeoutError):
         return AgentFailure(
             504,
@@ -99,11 +146,83 @@ def describe_agent_error(error: Exception) -> AgentFailure:
     if isinstance(error, ClientError) and error.code in {400, 401, 403, 404}:
         return AgentFailure(
             502,
-            "Gemini could not start this request. Check the server's API key, model access and Google Search support.",
+            "Gemini could not start this request. Check the server's credentials, project "
+            "permissions, enabled API, model access and Google Search support.",
             "provider_configuration",
         )
     return AgentFailure(
         502,
         "The stylist could not complete that reply. Your conversation is saved; please try again.",
+        "provider_failure",
+    )
+
+
+def describe_step_error(error: Exception) -> AgentFailure:
+    """Actionable errors for extraction/research/report steps; never echo provider text."""
+    if isinstance(error, GoogleAuthError):
+        return _adc_failure()
+    if isinstance(error, TimeoutError):
+        return AgentFailure(
+            504, "Gemini took too long to complete this step. Please retry.", "timeout"
+        )
+    if isinstance(error, ClientError):
+        if error.code == 429:
+            return _quota_failure(error)
+        details = {
+            400: (
+                (
+                    "Gemini rejected the request. For a photo, try re-exporting it as JPEG or PNG. "
+                    "The server's model and request configuration may also need review."
+                ),
+                "provider_request",
+            ),
+            401: (
+                (
+                    "Gemini authentication failed. Check Application Default Credentials "
+                    "for Vertex AI, or GOOGLE_API_KEY for the Gemini Developer API."
+                ),
+                "provider_auth",
+            ),
+            403: (
+                (
+                    "Gemini denied access. Check project permissions, API enablement and "
+                    "any API key restrictions."
+                ),
+                "provider_access",
+            ),
+            404: (
+                "The configured Gemini model or resource is unavailable. Check GEMINI_MODEL and project access.",
+                "provider_model",
+            ),
+        }
+        if error.code in details:
+            detail, reason = details[error.code]
+            return AgentFailure(502, detail, reason)
+    if isinstance(error, ValidationError):
+        return AgentFailure(
+            502,
+            "Gemini returned incomplete or invalid structured data. Please retry; for a photo, "
+            "try a clearer crop of the ingredient label.",
+            "invalid_response",
+        )
+    if isinstance(error, StructuredResponseError):
+        messages = {
+            "empty_response": "Gemini returned no readable answer. Please retry; for a photo, try a clearer label image.",
+            "response_truncated": "Gemini reached its output limit before completing the response. Please retry with a smaller label crop or fewer ingredients.",
+            "response_blocked": "Gemini did not return an answer for this request. Try a label-only photo or enter the ingredients as text.",
+            "model_response_error": "Gemini reported an error instead of a completed answer. Please retry.",
+        }
+        if error.reason in messages:
+            return AgentFailure(502, messages[error.reason], error.reason)
+    if isinstance(error, TransportError):
+        return AgentFailure(
+            502,
+            "The server could not reach Gemini. Check network access and retry.",
+            "provider_connection",
+        )
+    return AgentFailure(
+        502,
+        "The assistant could not complete this step. Please retry. The server log contains "
+        "a diagnostic category for the app owner.",
         "provider_failure",
     )

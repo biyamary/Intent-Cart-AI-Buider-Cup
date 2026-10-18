@@ -1,0 +1,111 @@
+[
+  {
+    "canonical": "sugar",
+    "additive_id": null,
+    "aliases": ["sugar", "sucrose"],
+    "exact_match": true,
+    "role": "Sweetener",
+    "explanation": "Adds sweetness. Its quantity in this product is not established by this review.",
+    "source_url": "https://www.fda.gov/food/food-additives-and-gras-ingredients-information-consumers/types-food-ingredients"
+  },
+  {
+    "canonical": "lecithins",
+    "additive_id": "E322",
+    "aliases": ["lecithin", "lecithins", "E322", "INS322"],
+    "role": "Emulsifier",
+    "explanation": "Helps ingredients mix and remain dispersed. The original label identifies the source, such as soy or egg.",
+    "source_url": "https://www.fda.gov/food/food-additives-and-gras-ingredients-information-consumers/types-food-ingredients",
+    "identity_source_url": "https://data.food.gov.uk/regulated-products/food_authorisations/e-322"
+  },
+  {
+    "canonical": "ammonium bicarbonate",
+    "additive_id": "E503(ii)",
+    "aliases": ["ammonium bicarbonate", "ammonium hydrogen carbonate", "E503(ii)", "INS503(ii)"],
+    "role": "Raising agent / acidity control",
+    "explanation": "Used for leavening baked goods and controlling acidity. The precise function depends on the recipe.",
+    "source_url": "https://www.hfpappexternal.fda.gov/scripts/fdcc/index.cfm?id=AMMONIUMBICARBONATE&set=FoodSubstances",
+    "identity_source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX%3A02012R0231-20250427"
+  },
+  {
+    "canonical": "propylene glycol",
+    "additive_id": "E1520",
+    "aliases": ["propylene glycol", "propane-1,2-diol", "1,2-propanediol", "E1520", "INS1520"],
+    "role": "Humectant / solvent",
+    "explanation": "Used to retain moisture or carry other ingredients. The listed use and concentration limits depend on the food category.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-184.1666",
+    "identity_source_url": "https://precision.fda.gov/ginas/app/ui/substances/6DC9Q167V3"
+  },
+  {
+    "canonical": "glycerol",
+    "additive_id": "E422",
+    "aliases": ["glycerol", "glycerin", "glycerine", "E422", "INS422"],
+    "role": "Texture / freezing control in slush ice drinks",
+    "explanation": "Helps achieve the partially frozen texture of slush ice drinks; purposes in other food categories need separate evidence.",
+    "source_url": "https://www.food.gov.uk/news-alerts/news/summer-slush-warning-glycerol-in-slush-ice-drinks-unsafe-for-children-under-7-and-should-be-limited-for-children-aged-7-to-10",
+    "age_advisories": [
+      {
+        "country": "UK", "age_groups": ["child"],
+        "note": "If this is a slush ice drink containing glycerol: UK FSA advice is no such drinks for under-7s, and at most one 350 ml drink per day for ages 7-10. Exact age and product type are not confirmed; this is scoped advice, not a general glycerol ban.",
+        "reviewed_at": "2026-10-18", "review_after": "2027-01-15"
+      }
+    ]
+  },
+  {
+    "canonical": "aspartame",
+    "additive_id": "E951",
+    "aliases": ["aspartame", "E951", "INS951"],
+    "role": "Sweetener",
+    "explanation": "Adds sweetness to foods and drinks.",
+    "source_url": "https://www.who.int/news/item/14-07-2023-aspartame-hazard-and-risk-assessment-results-released",
+    "iarc": {
+      "group": "2B", "evaluated_year": 2023,
+      "source_url": "https://www.who.int/news/item/14-07-2023-aspartame-hazard-and-risk-assessment-results-released",
+      "context": "Hazard classification based on limited evidence; it does not quantify cancer risk at normal dietary intake.",
+      "reviewed_at": "2026-10-18"
+    }
+  },
+  {
+    "canonical": "titanium dioxide",
+    "additive_id": "E171",
+    "aliases": ["titanium dioxide", "E171", "INS171"],
+    "role": "Colour (white pigment)",
+    "explanation": "Used to whiten or colour foods; authorization differs by jurisdiction.",
+    "source_url": "https://www.hfpappexternal.fda.gov/scripts/fdcc/index.cfm?id=TitaniumDioxide&set=ColorAdditives",
+    "iarc": {
+      "group": "2B", "evaluated_year": 2006,
+      "source_url": "https://monographs.iarc.who.int/wp-content/uploads/2018/09/List_of_Classifications.pdf",
+      "context": "The Volume 93 evaluation concerns poorly soluble particles and inhalation evidence. This hazard classification is not evidence of cancer risk from eating this product.",
+      "reviewed_at": "2026-10-18"
+    }
+  },
+  {
+    "canonical": "potassium bromate",
+    "additive_id": "E924a",
+    "aliases": ["potassium bromate", "E924a", "INS924a", "INS924"],
+    "role": "Flour treatment agent",
+    "explanation": "Used to improve the baking qualities of flour in certain regulated uses.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-137.155",
+    "iarc": {
+      "group": "2B", "evaluated_year": 1999,
+      "source_url": "https://publications.iarc.who.int/_publications/media/download/2459/19686c49c92f5a7541f1fa0aaba78c54f0c03c5b.pdf",
+      "context": "Hazard classification based on sufficient animal evidence and inadequate human evidence; it does not quantify cancer risk at normal dietary intake.",
+      "reviewed_at": "2026-10-18"
+    }
+  },
+  {
+    "canonical": "erythrosine",
+    "additive_id": "E127",
+    "aliases": ["erythrosine", "erythrosin", "E127", "INS127", "red 3", "red no. 3", "FD&C red no. 3", "FD&C red 3"],
+    "role": "Colour (red dye)",
+    "explanation": "Adds red colour; the US food authorization has a dated withdrawal transition.",
+    "source_url": "https://www.fda.gov/industry/color-additives/fdc-red-no-3"
+  },
+  {
+    "canonical": "brominated vegetable oil",
+    "additive_id": "E443",
+    "aliases": ["brominated vegetable oil", "brominated soybean oil", "BVO", "E443", "INS443"],
+    "role": "Flavouring oil stabilizer",
+    "explanation": "Historically used to keep citrus flavouring dispersed in beverages.",
+    "source_url": "https://www.fda.gov/food/food-additives-petitions/brominated-vegetable-oil-bvo"
+  }
+]

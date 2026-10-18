@@ -7,6 +7,7 @@ import { PageTitle, ErrorMessage } from '../components/Feedback'
 function ProfileForm({ profile }: { profile: ProfileData }) {
   const cache = useQueryClient()
   const [country, setCountry] = useState(profile.country)
+  const [foodCountries, setFoodCountries] = useState<Country[]>(profile.food_countries ?? [])
   const [age, setAge] = useState(profile.age_group)
   const [allergies, setAllergies] = useState(profile.allergies.join(', '))
   const [diet, setDiet] = useState(profile.diet.join(', '))
@@ -20,6 +21,7 @@ function ProfileForm({ profile }: { profile: ProfileData }) {
         method: 'PUT',
         body: JSON.stringify({
           country,
+          food_countries: foodCountries,
           age_group: age,
           allergies: commaList(allergies),
           diet: commaList(diet),
@@ -84,6 +86,28 @@ function ProfileForm({ profile }: { profile: ProfileData }) {
           placeholder="e.g. vegetarian"
         />
       </label>
+      <fieldset>
+        <legend>Food comparison countries</legend>
+        <p className="fine-print">Leave blank to use EU, UK, India, US and your country.</p>
+        <div className="chips">
+          {countries.map((region) => (
+            <label className="check-chip" key={region}>
+              <input
+                type="checkbox"
+                checked={foodCountries.includes(region)}
+                onChange={(e) =>
+                  setFoodCountries(
+                    e.target.checked
+                      ? [...foodCountries, region]
+                      : foodCountries.filter((c) => c !== region),
+                  )
+                }
+              />
+              {region}
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <hr />
       <h3>Your style preferences</h3>
       <div className="two-columns">
@@ -117,8 +141,8 @@ function ProfileForm({ profile }: { profile: ProfileData }) {
         />
       </label>
       <p className="fine-print">
-        The demo uses saved allergies for keyword matching. Other preferences are stored for the
-        future agent integrations.
+        Food reviews use your saved allergies, diet, age group and comparison countries. Analyze a
+        confirmed label again after changing these preferences.
       </p>
       <ErrorMessage error={save.error} />
       {save.isSuccess && (

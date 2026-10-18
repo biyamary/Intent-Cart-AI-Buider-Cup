@@ -1,13 +1,15 @@
 """Public API contracts. Monetary values are integer minor units (INR paise)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
-Country = Literal["India", "EU", "US", "UK", "UAE"]
+Country = Literal["India", "EU", "US", "UK", "UAE", "Canada", "Australia/NZ", "Japan"]
+RegulatoryStatus = Literal["banned", "restricted", "permitted", "unverified"]
+DEFAULT_COUNTRIES = ["EU", "UK", "India", "US"]
 Category = Literal[
     "outfit", "earrings", "necklace", "bangles", "footwear", "handbag", "hair accessories"
 ]
@@ -18,7 +20,7 @@ def new_id() -> str:
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class Contract(BaseModel):
@@ -34,6 +36,7 @@ class StyleProfile(Contract):
 
 class Profile(Contract):
     country: Country = "India"
+    food_countries: list[Country] = Field(default_factory=list, max_length=8)
     age_group: Literal["unspecified", "child", "teen", "adult"] = "unspecified"
     allergies: list[Text] = Field(default_factory=list, max_length=30)
     diet: list[Text] = Field(default_factory=list, max_length=20)
@@ -67,7 +70,7 @@ class ConfirmIngredients(Contract):
     ingredients: list[Text] = Field(min_length=1, max_length=200)
     contains: list[Text] = Field(default_factory=list, max_length=50)
     may_contain: list[Text] = Field(default_factory=list, max_length=50)
-    countries: list[Country] = Field(default=["India", "EU", "US"], min_length=1, max_length=5)
+    countries: list[Country] | None = Field(default=None, min_length=1, max_length=8)
 
 
 class AllergyAlert(Contract):
@@ -79,30 +82,70 @@ class AllergyAlert(Contract):
 class RegulatoryAlert(Contract):
     ingredient: str
     country: Country
-    status: Literal["banned", "restricted", "permitted", "unknown"] = "unknown"
+    status: RegulatoryStatus = "unverified"
     condition: str = "No reviewed regulation entry is available."
     source_url: str | None = None
     verified: bool = False
+    verification: Literal["reviewed", "citation_verified", "unverified"] = "unverified"
+    quote_or_snippet: str = ""
+    checked_at: str | None = None
+    effective_from: str | None = None
+    review_after: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_unknown(cls, value):
+        if isinstance(value, dict) and value.get("status") == "unknown":
+            return value | {"status": "unverified"}
+        return value
+
+
+class IarcClassification(Contract):
+    group: Literal["1", "2A", "2B", "3"]
+    label: str
+    source_url: str
+    evaluated_year: int
+    context: str
+    reviewed_at: str
 
 
 class Ingredient(Contract):
     raw: str
     canonical: str
     role: str = "Unverified"
-    explanation: str = "Ingredient explanation placeholder."
+    explanation: str = "No source-backed purpose is available."
+    additive_id: str | None = None
+    source_url: str | None = None
+    purpose_basis: Literal["reviewed", "label", "citation_verified", "unverified"] = "unverified"
+    iarc: IarcClassification | None = None
+
+
+class ResearchCoverage(Contract):
+    status: Literal["not_needed", "disabled", "completed", "partial", "unavailable"] = "not_needed"
+    total_gaps: int = 0
+    cache_hits: int = 0
+    attempted: int = 0
+    verified: int = 0
+    deferred: int = 0
+    failure_reason: str | None = None
+    message: str = ""
 
 
 class FoodReport(Contract):
     product: ProductLabel
     ingredients: list[Ingredient]
     allergy_alerts: list[AllergyAlert]
+    label_allergens: list[AllergyAlert] = Field(default_factory=list)
     regulatory_alerts: list[RegulatoryAlert]
     diet_conflicts: list[dict[str, str]] = Field(default_factory=list)
     age_notes: list[dict[str, str]] = Field(default_factory=list)
     things_to_watch: list[str]
     summary: str
+    profile_context: dict = Field(default_factory=dict)
+    research: ResearchCoverage = Field(default_factory=ResearchCoverage)
     disclaimer: str = (
-        "Not medical advice. Check the original label; this scaffold cannot establish suitability."
+        "Not medical advice. An ingredient list alone cannot establish product compliance or "
+        "individual suitability; quantities, food category and applicable dates matter."
     )
     generated_at: str = Field(default_factory=now)
 

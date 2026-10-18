@@ -74,9 +74,12 @@ export function Home() {
               <br />
               for you?
             </h2>
-            <p>Review a label, check your saved allergies, and see what still needs verifying.</p>
+            <p>
+              Chat with your food companion to decode chemical additives, spot good vs bad ingredients,
+              and compare country regulations.
+            </p>
             <span className="flow-link">
-              Check a food label <ArrowUpRight size={20} />
+              Explore food ingredients <ArrowUpRight size={20} />
             </span>
           </Link>
           <Link className="flow-card clothes-card" to="/clothes">

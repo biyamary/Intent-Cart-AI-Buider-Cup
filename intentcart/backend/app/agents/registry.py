@@ -5,6 +5,7 @@ from typing import Callable
 
 from google.adk.agents import LlmAgent
 
+from app.agents.food_agent import create_food_chat_agent
 from app.agents.stylist_agent import create_stylist_agent
 from app.config import Settings
 from app.schemas import Profile
@@ -36,6 +37,22 @@ AGENTS = {
             "style": profile.style.model_dump(),
         },
     ),
+    "food": AgentRegistration(
+        key="food",
+        display_name="Food companion",
+        factory=create_food_chat_agent,
+        enabled=lambda settings: settings.food_mode == "gemini",
+        capabilities=lambda settings: (
+            ["google_search", "web_fetch"]
+            if settings.food_search_enabled
+            else ["web_fetch"]
+        ),
+        profile_context=lambda profile: {
+            "country": profile.country,
+            "allergies": profile.allergies,
+            "age_group": profile.age_group,
+            "diet": profile.diet,
+            "food_countries": profile.food_countries,
+        },
+    ),
 }
-# Food's existing structured pipeline stays in food_agent.py. Register its
-# conversational entry point here once its prompt and tools are implemented.
