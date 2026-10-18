@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 import time
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -19,7 +20,15 @@ from app.clothes.service import LookError, LookService, shortlist
 from app.config import Settings
 from app.main import create_app
 from app.memory.store import MemoryStore
-from app.schemas import CatalogProduct, ChecklistChoice, ChecklistItem, LookBrief, PieceSpec
+from app.schemas import (
+    CatalogProduct,
+    ChecklistChoice,
+    ChecklistItem,
+    InspirationItem,
+    LookAnalysis,
+    LookBrief,
+    PieceSpec,
+)
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -201,8 +210,10 @@ def test_discovery_workflow_verifies_ranks_and_isolates_failures():
         assert earrings.candidates[0].match_reason == "Fits the brief."
 
         outfit = items["outfit"]
-        # ₹9,000 is above the outfit cap (₹8,181) so it stays in the pool, not the shortlist.
-        assert [p.title for p in outfit.candidates] == ["Mint lehenga set"]
+        # ₹9,000 is above the outfit cap (₹8,181) but fits the total budget and the
+        # brief, so it is offered after the in-budget option as a labelled stretch pick.
+        assert [p.title for p in outfit.candidates] == ["Mint lehenga set", "Mirror work lehenga"]
+        assert [p.stretch for p in outfit.candidates] == [False, True]
         assert len(outfit.pool) == 2
 
         footwear = items["footwear"]
@@ -269,10 +280,18 @@ def test_shortlist_budget_rejections_and_retailer_policy():
     ]
     item.rejected_ids = ["m1"]
     ids = [p.id for p in shortlist(item, "prefer")]
-    assert ids[0] == "mine" and "verified" in ids and "pricey" not in ids and "m1" not in ids
-    assert len(ids) == 4
-    assert [p.id for p in shortlist(item, "only")] == ["mine", "verified"]
-    assert "indie" not in [p.id for p in shortlist(item, "off")]
+    assert ids[:3] == ["mine", "verified", "indie"] and "pricey" not in ids and "m1" not in ids
+    assert len(ids) == 6
+    # Independent-only keeps own-domain stores (reviewed ones first), never marketplaces.
+    assert [p.id for p in shortlist(item, "only")] == ["mine", "verified", "indie"]
+    # Popular-first fills with marketplaces but keeps one slot for an independent store;
+    # balanced keeps two.
+    item.pool += [product(f"m{n}", 44_000, "marketplace", 90) for n in range(5, 9)]
+    popular = [p.id for p in shortlist(item, "off")]
+    assert popular[:5] == ["mine", "m2", "m3", "m4", "m5"] and len(popular) == 6
+    assert popular[-1] == "verified"
+    balanced = [p.id for p in shortlist(item, "balanced")]
+    assert {"indie", "verified"} <= set(balanced) and len(balanced) == 6
     # Popular-first ranks known platforms ahead of an unknown own-domain shop,
     # even when the latter has a slightly higher style score.
     item.pool = [
@@ -737,7 +756,11 @@ class Gated(Scripted):
     async def generate_content_async(self, llm_request, stream=False):
         self._requests.append(llm_request.model_copy(deep=True))
         instruction = str(llm_request.config.system_instruction)
-        if "find individual product pages" in instruction:
+        if "find individual product pages" in instruction and (
+            json.loads(last_text(llm_request)).get("pass") == "broader"
+        ):
+            yield text(json.dumps({"products": []}))
+        elif "find individual product pages" in instruction:
             gate = asyncio.Event()
             self._gates.append(gate)
             await gate.wait()
@@ -789,3 +812,232 @@ def test_newer_search_owns_the_item_and_stale_jobs_cannot_overwrite_it():
         assert [p.title for p in item.pool] == ["Mirror work lehenga"]
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------- recall + feedback
+LISTING = "https://www.myntra.com/jhumkas"
+LISTING_PAGES = {
+    LISTING: (
+        '<html><head><script type="application/ld+json">'
+        + json.dumps({
+            "@type": "ItemList",
+            "itemListElement": [
+                {"url": f"https://www.myntra.com/jhumkas/{n}/buy"} for n in range(1, 4)
+            ],
+        })
+        + "</script></head></html>"
+    ),
+    **{f"https://www.myntra.com/jhumkas/{n}/buy": html(f"Jhumka {n}", str(300 + n)) for n in range(1, 4)},
+    "https://handmade.example.in/products/pearl-jhumka": html("Pearl jhumka", "550"),
+}
+
+
+async def listing_fetch(url):
+    if url in LISTING_PAGES:
+        return FetchResult(True, url, url, 200, "text/html", LISTING_PAGES[url])
+    return await fake_fetch(url)
+
+
+class Recall(Scripted):
+    """First pass names a listing page; the broader pass finds an independent store."""
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self._requests.append(llm_request.model_copy(deep=True))
+        payload = json.loads(last_text(llm_request))
+        if "find individual product pages" in str(llm_request.config.system_instruction):
+            urls = (
+                ["https://handmade.example.in/products/pearl-jhumka"]
+                if payload["pass"] == "broader" else [LISTING]
+            )
+            yield text(json.dumps({"products": [{"url": u} for u in urls]}))
+        else:
+            yield text(json.dumps({"scores": [
+                {"id": c["id"], "score": 80, "reason": "ok"} for c in payload["candidates"]
+            ]}))
+
+
+def search_payloads(model, kind="find individual product pages"):
+    return [
+        json.loads(last_text(r)) for r in model._requests
+        if kind in str(r.config.system_instruction)
+    ]
+
+
+async def shopping_look(looks, categories=("earrings",), budget=1_000_000):
+    look = await looks.create_for_session(
+        "u", "s", LookBrief(occasion="Mehendi", total_budget_minor=budget)
+    )
+    await looks.propose_checklist("u", look.id, [PieceSpec(category=c) for c in categories])
+    return await looks.confirm_checklist(
+        "u", look.id, [ChecklistChoice(category=c) for c in categories]
+    )
+
+
+def test_search_follows_listing_pages_and_broadens_when_results_are_thin():
+    async def scenario():
+        looks = LookService(MemoryStore())
+        discovery = Discovery(settings(), looks, fetch=listing_fetch)
+        discovery.search_model = discovery.rank_model = model = Recall()
+        look = await shopping_look(looks)
+        await discovery.start("u", look.id)
+        await discovery.wait_idle()
+        item = (await looks.get("u", look.id)).items[0]
+        titles = {p.title for p in item.pool}
+        # Three products read from the listing page, one from the broader pass.
+        assert titles == {"Jhumka 1", "Jhumka 2", "Jhumka 3", "Pearl jhumka"}
+        first, broader = search_payloads(model)
+        assert first["pass"] == "first" and broader["pass"] == "broader"
+        assert {f["title"] for f in broader["already_found"]} == {"Jhumka 1", "Jhumka 2", "Jhumka 3"}
+        assert "myntra.com" in broader["stores_already_tried"]
+        # The independent store keeps a slot even though popular stores rank first.
+        assert "Pearl jhumka" in [p.title for p in item.candidates]
+
+    asyncio.run(scenario())
+
+
+def test_board_edits_during_a_search_do_not_discard_its_results():
+    async def scenario():
+        looks = LookService(MemoryStore())
+        discovery = Discovery(settings(), looks, fetch=fake_fetch)
+        discovery.search_model = discovery.rank_model = model = Gated()
+        look = await shopping_look(looks, ("outfit", "earrings"), budget=2_000_000)
+        outfit = look.items[0]
+        await discovery.start("u", look.id, [outfit.id])
+        while not model._gates:
+            await asyncio.sleep(0.01)
+        # A plan change elsewhere (e.g. removing a piece) used to idle and discard this search.
+        await looks.item_action("u", look.id, look.items[1].id, "remove")
+        model._gates[0].set()
+        await discovery.wait_idle()
+        outfit = (await looks.get("u", look.id)).items[0]
+        assert outfit.discovery == "ready" and [p.title for p in outfit.pool] == ["Mint lehenga set"]
+
+    asyncio.run(scenario())
+
+
+def test_feedback_hides_pins_and_steers_the_next_search():
+    async def scenario():
+        looks = LookService(MemoryStore())
+        discovery = Discovery(settings(), looks, fetch=listing_fetch)
+        discovery.search_model = discovery.rank_model = model = Recall()
+        look = await shopping_look(looks)
+        await discovery.start("u", look.id)
+        await discovery.wait_idle()
+        item = (await looks.get("u", look.id)).items[0]
+        ids = {p.title: p.id for p in item.pool}
+        await looks.give_feedback(
+            "u", look.id, item.id, ids["Jhumka 1"], "dislike", ["too_heavy"], "smaller please"
+        )
+        look = await looks.give_feedback(
+            "u", look.id, item.id, ids["Pearl jhumka"], "like", ["love_design"]
+        )
+        item = look.items[0]
+        assert ids["Jhumka 1"] not in [p.id for p in item.candidates]
+        assert item.candidates[0].title == "Pearl jhumka"  # liked products lead
+        with pytest.raises(LookError):
+            await looks.give_feedback("u", look.id, item.id, "p_invented", "like")
+
+        model._requests.clear()
+        await discovery.start("u", look.id, [item.id], request="use my feedback")
+        await discovery.wait_idle()
+        feedback = search_payloads(model)[0]["feedback"]
+        assert feedback["disliked"][0]["reasons"] == ["too_heavy"]
+        assert feedback["disliked"][0]["note"] == "smaller please"
+        assert feedback["liked"][0]["title"] == "Pearl jhumka"
+        ranked = search_payloads(model, "score product candidates")[0]
+        assert ranked["user_feedback"]["liked"][0]["title"] == "Pearl jhumka"
+        item = (await looks.get("u", look.id)).items[0]
+        assert "Pearl jhumka" in [p.title for p in item.pool]
+
+    asyncio.run(scenario())
+
+
+def test_feedback_endpoint_records_reactions_on_agent_looks(stylist):
+    client, _ = stylist
+    looks, uid = client.app.state.looks, "local-demo-user"
+
+    async def seed():
+        look = await shopping_look_for(looks, uid)
+        item_id = look.items[0].id
+        await looks.apply_discovery(
+            uid, look.id, item_id, status="ready",
+            pool=[product(f"p{n}", 40_000 + n, "independent", 80) for n in range(1, 4)],
+        )
+        return look.id, item_id
+
+    look_id, item_id = asyncio.run(seed())
+    path = f"/api/clothes/looks/{look_id}/items/{item_id}/feedback"
+    response = client.post(
+        path, json={"product_id": "p1", "sentiment": "dislike", "reasons": ["wrong_colour"]}
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert "p1" not in [p["id"] for p in item["candidates"]]
+    assert item["feedback"][0]["reasons"] == ["wrong_colour"]
+    assert item["feedback"][0]["title"] == "p1"
+    bad = client.post(path, json={"product_id": "p2", "sentiment": "meh"})
+    assert bad.status_code == 422
+    unknown = client.post(path, json={"product_id": "p_none", "sentiment": "like"})
+    assert unknown.status_code == 422
+
+
+async def shopping_look_for(looks, uid):
+    look = await looks.create_for_session(
+        uid, f"s-{uuid4().hex}", LookBrief(occasion="Haldi", total_budget_minor=500_000)
+    )
+    await looks.propose_checklist(uid, look.id, [PieceSpec(category="earrings")])
+    return await looks.confirm_checklist(uid, look.id, [ChecklistChoice(category="earrings")])
+
+
+def test_ideas_stage_starts_without_a_budget_and_uses_an_inspiration_image(stylist):
+    client, model = stylist
+    looks, uid = client.app.state.looks, "local-demo-user"
+    studio = client.app.state.studio
+    analysed = []
+
+    async def fake_analyze(request, images, look):
+        analysed.append((request, images))
+        return LookAnalysis(summary="Mint sharara", pieces=[PieceSpec(category="outfit")])
+
+    async def fake_image(url):
+        return (PNG, "image/png") if url == "https://i.pinimg.com/736x/a.jpg" else None
+
+    studio.analyze_reference = fake_analyze
+    script = {
+        1: call("save_brief", occasion="Cousin's wedding", description="pastel, light fabrics"),
+        2: text(
+            "Lovely. Would you like me to find some look ideas first?\n"
+            "Quick replies: Yes, show me ideas | I know what I want"
+        ),
+        3: call("propose_checklist", items=[{"category": "outfit", "target": "sharara"}]),
+        4: call("use_inspiration", number=1),
+        5: text("Idea 1 is now your reference."),
+    }
+    model._handler = lambda request, n: script[n]
+    session_id = new_session(client)
+    reply = send(client, session_id, "I need something for my cousin's wedding").json()
+    message = reply["messages"][-1]
+    assert message["text"] == "Lovely. Would you like me to find some look ideas first?"
+    assert message["suggestions"] == ["Yes, show me ideas", "I know what I want"]
+    look = client.get(f"/api/clothes/looks/{reply['look_id']}").json()
+    assert look["status"] == "exploring" and look["brief"]["total_budget_minor"] is None
+    assert look["budget_plan"]["note"] == "Share a total budget to plan the look."
+
+    async def add_idea():
+        def change(saved):
+            saved.inspiration = [InspirationItem(
+                kind="pinterest", url="https://www.pinterest.com/pin/1/",
+                title="Mint sharara", image_url="https://i.pinimg.com/736x/a.jpg",
+            )]
+        await looks.mutate(uid, reply["look_id"], change)
+
+    asyncio.run(add_idea())
+    with patch("app.clothes.tools.fetch_image", fake_image):
+        assert send(client, session_id, "Yes, idea 1 please").status_code == 200
+    responses = tool_responses(model._requests[4])[1:]  # [0] is the first turn's save_brief
+    # A checklist needs a budget; the idea becomes the analysed reference image.
+    assert "budget" in str(responses[0]["error"])
+    assert responses[-1]["used"] == "Mint sharara" and responses[-1]["image_analysed"]
+    assert analysed[0][1] == [(PNG, "image/png")]
+    look = client.get(f"/api/clothes/looks/{reply['look_id']}").json()
+    assert look["references"][0].startswith("idea-") and look["analysis"]["summary"]

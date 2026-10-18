@@ -5,7 +5,12 @@ page's structured data, in this order of trust:
 
   1. schema.org Product JSON-LD
   2. Shopify's public `/products/<handle>.js` endpoint (common on independent stores)
-  3. OpenGraph / product meta tags
+  3. OpenGraph / product meta tags, then schema.org microdata (`itemprop="price"`)
+  4. Amazon India's own price markup, which carries no structured data
+
+Listing pages (collections, categories) are not products, but they usually name
+product pages in a schema.org ItemList; `read_page` returns those links so
+search can follow them instead of discarding the page.
 
 A page without a title and an INR price is not treated as a product. The model
 never supplies these values; search results only nominate URLs.
@@ -191,6 +196,7 @@ class _HeadParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.ld_json: list[str] = []
         self.canonical: str | None = None
+        self.itemprops: dict[str, str] = {}
         self.title = ""
         self._in_ld = False
         self._in_title = False
@@ -198,6 +204,9 @@ class _HeadParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         values = {key.lower(): (value or "") for key, value in attrs}
+        prop = values.get("itemprop", "").lower()
+        if prop in {"price", "pricecurrency", "lowprice"} and "content" in values:
+            self.itemprops.setdefault(prop, values["content"].strip())
         if tag == "meta":
             key = (values.get("property") or values.get("name") or values.get("itemprop") or "").lower()
             if key and "content" in values and key not in self.meta:
@@ -355,8 +364,56 @@ def _from_meta(meta: dict[str, str], facts: PageFacts) -> None:
         )
 
 
+def _from_microdata(props: dict[str, str], facts: PageFacts) -> None:
+    if facts.price_minor is not None:
+        return
+    price = parse_price(props.get("price") or props.get("lowprice"))
+    currency = (props.get("pricecurrency") or "").upper()
+    if price is not None and currency:
+        facts.price_minor, facts.currency = price, currency
+        facts.verification = "microdata"
+
+
+SHOPIFY_CURRENCY_RE = re.compile(r'Shopify\.currency\s*=\s*\{\s*"active"\s*:\s*"([A-Z]{3})"')
+AMAZON_PRICE_RE = re.compile(
+    r'"priceAmount"\s*:\s*([\d.]+)\s*,\s*"currencySymbol"\s*:\s*"(?:₹|\\u20b9)"'
+)
+AMAZON_TITLE_RE = re.compile(r'id="productTitle"[^>]*>\s*([^<]{3,300}?)\s*<')
+AMAZON_IMAGE_RE = re.compile(r'"hiRes"\s*:\s*"(https://m\.media-amazon\.com/[^"]+)"')
+AMAZON_RATING_RE = re.compile(r'id="acrPopover"[^>]*title="([\d.]+) out of 5')
+AMAZON_COUNT_RE = re.compile(r'id="acrCustomerReviewText"[^>]*>\s*\(?([\d,]+)')
+
+
+def _from_amazon(html: str, facts: PageFacts) -> None:
+    """Amazon India publishes no Product JSON-LD; read its own price markup."""
+    if facts.price_minor is not None or not host_of(facts.url).endswith("amazon.in"):
+        return
+    price, title = AMAZON_PRICE_RE.search(html), AMAZON_TITLE_RE.search(html)
+    if not (price and title) or (amount := parse_price(price.group(1))) is None:
+        return
+    facts.price_minor, facts.currency = amount, "INR"
+    facts.title = _text(title.group(1))
+    facts.verification = "page_html"
+    facts.seller_name = facts.seller_name or "Amazon.in"
+    if image := AMAZON_IMAGE_RE.search(html):
+        facts.image_url = facts.image_url or image.group(1)
+    if rating := AMAZON_RATING_RE.search(html):
+        try:
+            facts.rating = min(5.0, round(float(rating.group(1)), 1))
+        except ValueError:
+            pass
+    if count := AMAZON_COUNT_RE.search(html):
+        facts.rating_count = int(count.group(1).replace(",", ""))
+
+
 def parse_product_page(html: str, url: str) -> tuple[PageFacts, str | None]:
     """Return facts and the page's canonical URL (if any)."""
+    facts, canonical, _ = parse_page(html, url)
+    return facts, canonical
+
+
+def parse_page(html: str, url: str) -> tuple[PageFacts, str | None, list[str]]:
+    """Return facts, the canonical URL and the product links a schema.org ItemList names."""
     parser = _HeadParser()
     try:
         parser.feed(html)
@@ -366,10 +423,67 @@ def parse_product_page(html: str, url: str) -> tuple[PageFacts, str | None]:
     facts = PageFacts(url=url)
     _from_json_ld(parser.ld_json, facts)
     _from_meta(parser.meta, facts)
+    _from_microdata(parser.itemprops, facts)
+    _from_amazon(html, facts)
+    # Shopify themes state the store currency even when the price tags omit it.
+    if (
+        facts.price_minor is not None
+        and facts.currency is None
+        and (match := SHOPIFY_CURRENCY_RE.search(html))
+    ):
+        facts.currency = match.group(1)
     if not facts.title:
         facts.title = _text(parser.title)
     canonical = normalise_url(urljoin(url, parser.canonical)) if parser.canonical else None
-    return facts, canonical
+    return facts, canonical, _item_list_links(parser.ld_json, url)
+
+
+# Product URL shapes on common store platforms, for listings without an ItemList.
+PRODUCT_LINK_RES = (
+    re.compile(r'href="((?:https://[^"/]+)?/(?:collections/[^"/]+/)?products/[A-Za-z0-9][^"?#/]*)"'),
+    re.compile(r'href="((?:https://[^"/]+)?/[^"?#]*/p/itm[0-9a-z]+)'),
+    re.compile(r'href="((?:https://[^"/]+)?/(?:[^"?#]*/)?dp/[A-Z0-9]{10})'),
+)
+
+
+def _item_list_links(blocks: list[str], base: str) -> list[str]:
+    links: list[str] = []
+    for raw in blocks:
+        try:
+            data = json.loads(raw.strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for node in _iter_ld(data):
+            if not _is_type(node, "ItemList"):
+                continue
+            for entry in node.get("itemListElement") or []:
+                if not isinstance(entry, dict):
+                    continue
+                target = entry.get("url") or entry.get("item")
+                if isinstance(target, dict):
+                    target = target.get("url") or target.get("@id")
+                if isinstance(target, str) and (url := normalise_url(urljoin(base, target))):
+                    links.append(url)
+    return links
+
+
+def listing_links(html: str, url: str, limit: int = 12) -> list[str]:
+    """Same-host product links on a listing page: ItemList first, then known URL shapes."""
+    _, _, links = parse_page(html, url)
+    if not links:
+        for pattern in PRODUCT_LINK_RES:
+            links += [u for m in pattern.findall(html) if (u := normalise_url(urljoin(url, m)))]
+    host = host_of(url)
+    same_host = (_canonical_product(link) for link in links if host_of(link) == host)
+    return [link for link in dict.fromkeys(same_host) if link != url][:limit]
+
+
+def _canonical_product(url: str) -> str:
+    # Amazon product slugs vary; /dp/<ASIN> is the stable page for one listing.
+    if host_of(url).endswith("amazon.in") and (match := re.search(r"/dp/([A-Z0-9]{10})", url)):
+        return f"https://www.amazon.in/dp/{match.group(1)}"
+    # Shopify serves the same product under /collections/<name>/products/<handle>.
+    return re.sub(r"/collections/[^/]+(/products/)", r"\1", url)
 
 
 def shopify_handle_url(url: str) -> str | None:
@@ -396,13 +510,19 @@ def apply_shopify(data: dict, facts: PageFacts) -> None:
 
 async def read_product(url: str, fetch: Fetcher) -> tuple[PageFacts | None, str]:
     """Fetch and parse one candidate. Returns (facts, reason) where reason explains a miss."""
+    facts, reason, _ = await read_page(url, fetch)
+    return facts, reason
+
+
+async def read_page(url: str, fetch: Fetcher) -> tuple[PageFacts | None, str, list[str]]:
+    """Like read_product, plus product links when the page is a listing rather than a product."""
     page = await fetch(url)
     if not page.ok or not page.final_url:
-        return None, page.error or "fetch_failed"
+        return None, page.error or "fetch_failed", []
     if page.content_type not in HTML_TYPES:
-        return None, "not_html"
+        return None, "not_html", []
     final = page.final_url
-    facts, canonical = parse_product_page(page.body, final)
+    facts, canonical, _ = parse_page(page.body, final)
     if canonical and host_of(canonical) == host_of(final):
         facts.url = canonical
     else:
@@ -420,9 +540,11 @@ async def read_product(url: str, fetch: Fetcher) -> tuple[PageFacts | None, str]
                 apply_shopify(data, facts)
     if not facts.is_product:
         if facts.price_minor is not None and facts.currency not in (None, "INR"):
-            return None, "not_inr"
-        return None, "no_price" if facts.title else "not_a_product"
-    return facts, "ok"
+            return None, "not_inr", []
+        if links := listing_links(page.body, final):
+            return None, "listing", links
+        return None, "no_price" if facts.title else "not_a_product", []
+    return facts, "ok", []
 
 
 async def resolve_redirect(url: str, fetch: Fetcher) -> str | None:

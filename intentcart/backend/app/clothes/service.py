@@ -22,16 +22,23 @@ from app.schemas import (
     Look,
     LookBrief,
     PieceSpec,
+    ProductFeedback,
     now,
 )
 from app.tools.budget import allocate_budget
 from app.tools.product_search import seed_catalog
 
-SHORTLIST_SIZE = 4
-POOL_SIZE = 12
+SHORTLIST_SIZE = 6
+POOL_SIZE = 24
 SMALL_BUSINESS_BOOST = 10
 # Below this fit score a product is a mismatch (wrong item, bulk pack…); show nothing instead.
 MIN_FIT = 35
+# A product above the item's planned budget is still offered when it fits this well.
+STRETCH_FIT = 60
+MAX_STRETCH = 2
+# Shortlist slots kept for independent stores when one qualifies, by retailer policy.
+INDEPENDENT_SLOTS = {"popular_first": 1, "balanced": 2}
+INDEPENDENT_LABELS = {"independent", "verified_small_business"}
 
 
 class LookError(Exception):
@@ -46,19 +53,30 @@ def product_id(url: str) -> str:
 
 
 def shortlist(
-    item: ChecklistItem, policy: str = "popular_first", preferred_platforms: list[str] | None = None
+    item: ChecklistItem,
+    policy: str = "popular_first",
+    preferred_platforms: list[str] | None = None,
+    remaining_budget_minor: int | None = None,
 ) -> list[CatalogProduct]:
-    """Deterministic shortlist: budget, stock and rejections first, then style score."""
-    eligible = [
+    """Deterministic shortlist: budget, stock and rejections first, then style score.
+
+    Liked products stay at the front. Under popular-first and balanced policies a
+    qualifying independent store keeps at least one slot, so smaller sellers are
+    seen without hiding the big marketplaces. When too few products fit the
+    item's planned budget, up to two strong matches that still fit the remaining
+    total budget are offered as clearly labelled stretch picks.
+    """
+    usable = [
         p
         for p in item.pool
-        if p.price_minor <= item.budget_cap_minor
-        and p.id not in item.rejected_ids
+        if p.id not in item.rejected_ids
         and p.availability != "out_of_stock"
         and (p.style_score is None or p.style_score >= MIN_FIT or p.source == "user")
     ]
+    eligible = [p for p in usable if p.price_minor <= item.budget_cap_minor]
     user_added = [p for p in eligible if p.source == "user"]
     eligible = [p for p in eligible if p.source != "user"]
+    liked = {f.product_id for f in item.feedback if f.sentiment == "like"}
     # Accept the old values for callers/persisted clients while new APIs use the
     # clearer retailer policy names.
     policy = {
@@ -67,21 +85,53 @@ def shortlist(
         "only": "independent_only",
     }.get(policy, policy)
     if policy == "independent_only":
-        eligible = [p for p in eligible if is_small_business(p.seller_label)]
+        eligible = [p for p in eligible if p.seller_label in INDEPENDENT_LABELS]
 
     def rank(product: CatalogProduct):
         fit = -(product.style_score or 50)
         store = retailer_priority(product.url, product.seller_label, preferred_platforms)
+        loved = 0 if product.id in liked else 1
         if policy == "popular_first":
-            return (store, fit, product.price_minor)
-        if policy == "independent_first":
-            independent = 0 if is_small_business(product.seller_label) else 1
-            return (independent, fit, store, product.price_minor)
-        return (fit, store, product.price_minor)
+            return (loved, store, fit, product.price_minor)
+        if policy in {"independent_first", "independent_only"}:
+            verified = 0 if is_small_business(product.seller_label) else 1
+            independent = 0 if product.seller_label in INDEPENDENT_LABELS else 1
+            return (loved, independent, verified, fit, store, product.price_minor)
+        return (loved, fit, store, product.price_minor)
 
     ranked = sorted(eligible, key=rank)
-    top = ranked[: max(0, SHORTLIST_SIZE - len(user_added))]
-    return user_added + top
+    slots = max(0, SHORTLIST_SIZE - len(user_added))
+    top = ranked[:slots]
+    wanted = INDEPENDENT_SLOTS.get(policy, 0)
+    spare = [p for p in ranked[slots:] if p.seller_label in INDEPENDENT_LABELS]
+    while spare and top and sum(p.seller_label in INDEPENDENT_LABELS for p in top) < wanted:
+        # Replace the lowest-ranked popular pick the user has not liked.
+        swap = next(
+            (i for i in range(len(top) - 1, -1, -1)
+             if top[i].seller_label not in INDEPENDENT_LABELS and top[i].id not in liked),
+            None,
+        )
+        if swap is None:
+            break
+        top[swap] = spare.pop(0)
+
+    picks = user_added + top
+    free = min(MAX_STRETCH, SHORTLIST_SIZE - len(picks))
+    if free > 0 and remaining_budget_minor:
+        shown = {p.id for p in picks}
+        stretch = sorted(
+            (
+                p for p in usable
+                if p.id not in shown
+                and p.source != "user"
+                and item.budget_cap_minor < p.price_minor <= remaining_budget_minor
+                and (p.id in liked or (p.style_score or 0) >= STRETCH_FIT)
+                and (policy != "independent_only" or p.seller_label in INDEPENDENT_LABELS)
+            ),
+            key=lambda p: (0 if p.id in liked else 1, -(p.style_score or 0), p.price_minor),
+        )
+        picks += [p.model_copy(update={"stretch": True}) for p in stretch[:free]]
+    return picks
 
 
 def refresh(look: Look) -> Look:
@@ -98,7 +148,10 @@ def refresh(look: Look) -> Look:
                 if p.category == item.category and p.price_minor <= item.budget_cap_minor
             ]
         else:
-            item.candidates = shortlist(item, look.brief.retailer_policy, look.brief.platforms)
+            item.candidates = shortlist(
+                item, look.brief.retailer_policy, look.brief.platforms,
+                look.remaining_budget_minor,
+            )
     return look
 
 
@@ -164,11 +217,9 @@ class LookService:
             look = await self.get(uid, look_id)
             change(look)
             if plan_change:
+                # Running searches keep going: verified products are facts that do not
+                # depend on the plan, and each item's newest search job owns its results.
                 look.plan_revision += 1
-                for item in look.items:
-                    if item.status == "open" and item.discovery == "searching":
-                        item.discovery = "idle"
-                        item.discovery_note = "The plan changed; verified results will be reused."
             try:
                 refresh(look)
             except ValueError as error:
@@ -190,8 +241,11 @@ class LookService:
         if existing := await self.find_for_session(uid, session_id):
             return await self.update_brief(uid, existing.id, brief.model_dump())
         look_id = hashlib.sha256(f"agent-look:{session_id}".encode()).hexdigest()[:32]
-        look = Look(id=look_id, brief=brief, items=[], mode="agent", session_id=session_id)
-        look.remaining_budget_minor = brief.total_budget_minor
+        look = Look(
+            id=look_id, brief=brief, items=[], mode="agent", session_id=session_id,
+            status="exploring" if brief.total_budget_minor is None else "awaiting_checklist",
+        )
+        look.remaining_budget_minor = brief.total_budget_minor or 0
         return await self.create(uid, look)
 
     async def update_brief(self, uid: str, look_id: str, changes: dict) -> Look:
@@ -209,7 +263,7 @@ class LookService:
             except ValidationError as error:
                 fields = ", ".join(str(e["loc"][0]) for e in error.errors()[:3])
                 raise LookError(422, f"Invalid brief values: {fields}.") from None
-            if brief.total_budget_minor < look.total_spent_minor:
+            if (brief.total_budget_minor or 0) < look.total_spent_minor:
                 raise LookError(422, "The new budget is below what is already selected.")
             look.brief = brief
 
@@ -266,6 +320,8 @@ class LookService:
     # ------------------------------------------------------------------ checklist
     async def propose_checklist(self, uid: str, look_id: str, pieces: list[PieceSpec]) -> Look:
         def change(look: Look):
+            if look.brief.total_budget_minor is None:
+                raise LookError(409, "Ask for the total budget before proposing a checklist.")
             if any(item.status == "locked" for item in look.items):
                 raise LookError(
                     409, "Items are already selected; add or remove single items instead."
@@ -331,7 +387,8 @@ class LookService:
                 product = next((p for p in item.candidates if p.id == product_id), None)
                 if product is None or product.price_minor > look.remaining_budget_minor:
                     raise LookError(422, "Choose a current candidate within the remaining budget.")
-                item.chosen_product, item.status = product, "locked"
+                item.chosen_product = product.model_copy(update={"stretch": False})
+                item.status = "locked"
             elif action == "reject":
                 if not product_id or not any(
                     p.id == product_id for p in item.pool + item.candidates
@@ -374,7 +431,9 @@ class LookService:
             item.discovery, item.discovery_note = status, note[:300]
             if pool is None:
                 return
-            kept = [] if replace else [p for p in item.pool if p.source == "user"]
+            # User-added and liked products survive every new search.
+            liked = {f.product_id for f in item.feedback if f.sentiment == "like"}
+            kept = [p for p in item.pool if p.source == "user" or p.id in liked]
             seen = {p.id for p in kept}
             merged = kept + [p for p in pool if p.id not in seen and not seen.add(p.id)]
             if not replace:
@@ -402,6 +461,44 @@ class LookService:
                     product.style_score, product.match_reason = scores[product.id]
 
         return await self.mutate(uid, look_id, change, "rescored")
+
+    async def give_feedback(
+        self,
+        uid: str,
+        look_id: str,
+        item_id: str,
+        product_id: str,
+        sentiment: str,
+        reasons: list[str] | None = None,
+        note: str = "",
+    ) -> Look:
+        """Record a like/dislike on one candidate; a dislike also hides it."""
+
+        def change(look: Look):
+            item = find_item(look, item_id)
+            product = next(
+                (p for p in item.candidates + item.pool if p.id == product_id), None
+            )
+            if product is None:
+                raise LookError(422, "That product is not a candidate for this item.")
+            entry = ProductFeedback(
+                product_id=product.id,
+                title=product.title[:200],
+                colour=product.colour[:40],
+                price_minor=product.price_minor,
+                retailer=product.retailer[:120],
+                sentiment=sentiment,
+                reasons=reasons or [],
+                note=note,
+            )
+            earlier = [f for f in item.feedback if f.product_id != product.id]
+            item.feedback = [*earlier, entry][-24:]
+            if sentiment == "dislike":
+                item.rejected_ids = [*item.rejected_ids, product.id][-50:]
+            else:
+                item.rejected_ids = [i for i in item.rejected_ids if i != product.id]
+
+        return await self.mutate(uid, look_id, change, "feedback")
 
     async def add_user_product(
         self, uid: str, look_id: str, item_id: str, product: CatalogProduct

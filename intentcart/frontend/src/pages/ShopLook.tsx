@@ -17,8 +17,8 @@ import '../look-board.css'
 const sessionPath = '/agents/stylist/sessions'
 const stylistPresentation = agentProfiles.stylist
 const starters = [
+  "I'm going to a wedding but don't know what to wear. Help me find ideas.",
   'Help me recreate this Mehendi look with affordable accessories.',
-  "I want an outfit for my sister's mehendi.",
   'Build a smart-casual work dinner look under ₹5,000.',
 ]
 const imageTypes = ['image/jpeg', 'image/png', 'image/webp']
@@ -127,11 +127,15 @@ export function ShopLook() {
     if (pane) pane.scrollTo({ top: pane.scrollHeight, behavior: 'auto' })
   }, [messages.length, turn.isRunning, turn.status?.progress.stage])
 
-  function submit() {
-    const text = draft.trim()
+  function send(value: string) {
+    const text = value.trim()
     if (!text || busy || !enabled || conversation.isError) return
     const body = { text, request_id: crypto.randomUUID(), attachments }
     turn.send.mutate(body)
+  }
+
+  function submit() {
+    send(draft)
   }
 
   function selectConversation(id?: string) {
@@ -143,11 +147,19 @@ export function ShopLook() {
     attach.reset()
   }
 
-  function refineLook(prompt: string) {
-    setDraft(prompt)
+  function refineLook(prompt: string, sendNow = false) {
     setView('chat')
+    if (sendNow && !busy) {
+      send(prompt)
+      return
+    }
+    setDraft(prompt)
     window.requestAnimationFrame(() => composer.current?.focus())
   }
+
+  const lastMessage = messages[messages.length - 1]
+  const quickReplies =
+    !pending && lastMessage?.role === 'assistant' ? (lastMessage.suggestions ?? []) : []
 
   const imagePath = (name: string) => `${sessionPath}/${sessionId}/artifacts/${name}`
 
@@ -209,8 +221,8 @@ export function ShopLook() {
             </div>
             <h3>What are you dressing for?</h3>
             <p>
-              Tell Mira the occasion, your total budget, and what you need—or attach a look you
-              love.
+              Tell Mira the occasion and your budget, attach a look you love, or just say where
+              you're going and Mira will help you find ideas.
             </p>
             <div className="conversation-starters">
               {starters.map((text) => (
@@ -251,6 +263,21 @@ export function ShopLook() {
             )}
           </div>
         ))}
+        {quickReplies.length > 0 && (
+          <div className="quick-replies" role="group" aria-label="Quick replies">
+            {quickReplies.map((reply) => (
+              <button
+                key={reply}
+                type="button"
+                className="secondary small"
+                disabled={busy || !enabled}
+                onClick={() => send(reply)}
+              >
+                {reply}
+              </button>
+            ))}
+          </div>
+        )}
         {pending && (
           <>
             <article className="chat-message from-user">

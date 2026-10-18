@@ -36,6 +36,7 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 LOOK_KEY = "look:id"
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+EXTENSIONS = {"image/jpeg": "jpg", "image/webp": "webp", "image/png": "png"}
 
 
 @dataclass
@@ -64,7 +65,19 @@ def product_line(p: CatalogProduct) -> dict:
         line["why"] = p.match_reason
     if p.source == "user":
         line["added_by_user"] = True
+    if p.stretch:
+        line["above_item_budget"] = True
     return line
+
+
+def feedback_line(item) -> dict:
+    return {
+        sentiment: [
+            {"title": f.title, "reasons": f.reasons, "note": f.note}
+            for f in item.feedback if f.sentiment == sentiment
+        ][-4:]
+        for sentiment in ("like", "dislike")
+    }
 
 
 def snapshot(look: Look, *, candidates: bool = True) -> dict:
@@ -90,6 +103,8 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
                 entry["search_note"] = item.discovery_note
             if candidates:
                 entry["candidates"] = [product_line(p) for p in item.candidates]
+            if item.feedback:
+                entry["user_feedback"] = feedback_line(item)
         if item.chosen_product:
             entry["selected"] = product_line(item.chosen_product)
         if item.boutiques:
@@ -99,7 +114,8 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
     return {
         "look_status": look.status,
         "occasion": brief.occasion,
-        "budget": inr(brief.total_budget_minor),
+        "budget": inr(brief.total_budget_minor) if brief.total_budget_minor else "not set yet",
+        "style_notes": brief.description,
         "spent": inr(look.total_spent_minor),
         "remaining": inr(look.remaining_budget_minor),
         "budget_plan": {
@@ -126,7 +142,11 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
             if v
         },
         "items": items,
-        "inspiration_count": len(look.inspiration),
+        # Numbered as on the board, so "idea 2" in chat maps to use_inspiration(2).
+        "inspiration_ideas": [
+            {"number": n, "title": i.title or i.source, "kind": i.kind}
+            for n, i in enumerate(look.inspiration, start=1)
+        ],
         "concept_images": len(look.concepts),
     }
 
@@ -134,7 +154,10 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
 def describe_look(look: Look | None) -> str:
     """Compact context for the coordinator's instruction (data, not instructions)."""
     if look is None:
-        return "Current look: none yet. Call save_brief once the occasion and budget are known."
+        return (
+            "Current look: none yet. Call save_brief once the occasion is known (the budget "
+            "can come later, but is needed before a checklist)."
+        )
     text = "Current look board (live data; trust it over earlier messages):\n" + json.dumps(
         snapshot(look), ensure_ascii=False
     )
@@ -179,9 +202,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         if not look_id:
             recovered = await looks.find_for_session(tool_context.user_id, tool_context.session.id)
             if recovered is None:
-                raise LookError(
-                    409, "No look yet: call save_brief with the occasion and budget first."
-                )
+                raise LookError(409, "No look yet: call save_brief with the occasion first.")
             tool_context.state[LOOK_KEY] = recovered.id
             return recovered
         return await looks.get(tool_context.user_id, look_id)
@@ -216,14 +237,17 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
     ) -> dict:
         """Create or update the look brief on the user's look board.
 
-        Call as soon as the occasion and total budget are known, and again whenever
-        the user changes a preference. Only pass fields the user stated or confirmed.
+        Call as soon as the occasion is known, and again whenever the user shares or
+        changes a preference. Without a budget the board is in an ideas stage
+        (inspiration only); a checklist and shopping need the total budget. Only
+        pass fields the user stated or confirmed.
 
         Args:
             occasion: The event, e.g. "Sister's mehendi".
             total_budget_inr: Total budget for the whole look in whole rupees.
-            description: The style the user described, including modifiers such as
-                "more affordable accessories".
+            description: The style the user described and preferences gathered so far
+                (vibe, comfort, coverage, fabrics, tradition), including modifiers such
+                as "more affordable accessories".
             event_date: Event date as the user said it, e.g. "2026-11-14".
             sizes: Sizes as the user stated them, e.g. "M top, UK 5 shoes".
             colours: Preferred colours.
@@ -276,8 +300,8 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
                     await discovery.start(uid, look.id, ids, request="Preferences updated")
                     look = await looks.get(uid, look.id)
         else:
-            if not occasion or not total_budget_inr:
-                return {"error": "Both occasion and total_budget_inr are needed to start a look."}
+            if not occasion:
+                return {"error": "The occasion is needed to start a look."}
             brief = LookBrief.model_validate({k: v for k, v in changes.items() if v is not None})
             look = await looks.create_for_session(uid, tool_context.session.id, brief)
             tool_context.state[LOOK_KEY] = look.id
@@ -414,6 +438,8 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
     ) -> dict:
         """Search stores again for open items (all open items if categories is empty).
 
+        The user's likes and dislikes on earlier candidates are applied automatically.
+
         Args:
             categories: Item categories to search, e.g. ["earrings"].
             request: Extra guidance from the user, e.g. "more silver, less heavy".
@@ -505,6 +531,49 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         return {"changed": True, "look": snapshot(look)}
 
     @tool_errors
+    async def give_feedback(
+        tool_context: ToolContext,
+        category: str,
+        product_id: str,
+        sentiment: str,
+        reasons: list[str] | None = None,
+        note: str = "",
+        search_again: bool = False,
+    ) -> dict:
+        """Record the user's reaction to one candidate so later searches learn from it.
+
+        A dislike hides the product; a like keeps it pinned at the front. Every new
+        search and ranking for the item uses all feedback given so far. Set
+        search_again when the user wants new options now (e.g. "find more like
+        the first one" or "these are all too heavy").
+
+        Args:
+            category: The item, e.g. "earrings".
+            product_id: The candidate id from the look board data.
+            sentiment: "like" or "dislike".
+            reasons: Any of too_expensive, wrong_colour, too_heavy, too_plain,
+                not_my_style, poor_quality_look, wrong_item, love_colour,
+                love_design, good_price.
+            note: The user's own words, e.g. "want smaller jhumkas".
+            search_again: Start a new search for this item with the feedback.
+        """
+        look = await current(tool_context)
+        item = find_item(look, category)
+        look = await looks.give_feedback(
+            tool_context.user_id, look.id, item.id, product_id, sentiment, reasons, note
+        )
+        searching = False
+        if search_again or len(find_item(look, item.id).candidates) < 2:
+            searching = bool(
+                await discovery.start(
+                    tool_context.user_id, look.id, [item.id], request=note or "use my feedback"
+                )
+            )
+        fresh = snapshot(await looks.get(tool_context.user_id, look.id))
+        entry = next(e for e in fresh["items"] if e["category"] == item.category)
+        return {"recorded": sentiment, "searching_again": searching, "item": entry}
+
+    @tool_errors
     async def refine_look(
         tool_context: ToolContext,
         kind: str,
@@ -578,10 +647,14 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
     # ------------------------------------------------------------------ imagination
     @tool_errors
     async def find_inspiration(tool_context: ToolContext, request: str = "") -> dict:
-        """Find Pinterest pins and editorial images for the look and show them on the board.
+        """Find Pinterest pins and editorial looks (Google) and show them, numbered, on the board.
+
+        Works in the ideas stage before a budget is set. Afterwards ask which ideas
+        the user likes; use_inspiration turns one into the reference look.
 
         Args:
-            request: What to look for, e.g. "pastel mehendi looks with mirror work".
+            request: What to look for, using everything known about their taste, e.g.
+                "pastel mehendi looks with mirror work, lightweight, not too flashy".
         """
         look = await current(tool_context)
         found = await studio.find_inspiration(look, request)
@@ -599,6 +672,43 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             "found": len(found),
             "pinterest": sum(i.kind == "pinterest" for i in found),
             "titles": [i.title for i in found if i.title][:6],
+        }
+
+    @tool_errors
+    async def use_inspiration(tool_context: ToolContext, number: int, request: str = "") -> dict:
+        """Use one inspiration idea from the board as the user's reference look.
+
+        Reads the idea's image, keeps it as the reference photo and analyses it into
+        shoppable pieces, like analyze_reference. Follow with propose_checklist (ask
+        for the budget first if it is not set).
+
+        Args:
+            number: The idea's number on the board (inspiration_ideas in the board data).
+            request: The user's wishes for it, e.g. "this one but in pastel blue".
+        """
+        look = await current(tool_context)
+        if not 1 <= number <= len(look.inspiration):
+            return {"error": f"There is no idea number {number} on the board."}
+        idea = look.inspiration[number - 1]
+        images, names = [], []
+        if idea.image_url and (image := await fetch_image(idea.image_url)):
+            data, mime = image
+            name = f"idea-{uuid4().hex[:10]}.{EXTENSIONS.get(mime, 'png')}"
+            await tool_context.save_artifact(name, types.Part.from_bytes(data=data, mime_type=mime))
+            images.append(image)
+            names.append(name)
+        wishes = request or f"Recreate this look: {idea.title or 'the chosen inspiration'}"
+        analysis = await studio.analyze_reference(wishes, images, look)
+
+        def change(saved: Look):
+            saved.analysis = analysis
+            saved.references = (names + saved.references)[:6]
+
+        await looks.mutate(tool_context.user_id, look.id, change, "analysis")
+        return {
+            "used": idea.title or f"idea {number}",
+            "image_analysed": bool(images),
+            "analysis": analysis.model_dump(),
         }
 
     @tool_errors
@@ -637,8 +747,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         elif kind != "concept":
             return {"error": "kind must be concept, edit_reference or final."}
         data, mime = await studio.generate_concept(concept_prompt(kind, look, instructions), images)
-        extension = {"image/jpeg": "jpg", "image/webp": "webp"}.get(mime, "png")
-        name = f"concept-{uuid4().hex[:10]}.{extension}"
+        name = f"concept-{uuid4().hex[:10]}.{EXTENSIONS.get(mime, 'png')}"
         await tool_context.save_artifact(name, types.Part.from_bytes(data=data, mime_type=mime))
         caption = {
             "concept": "AI concept of the look",
@@ -703,10 +812,12 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         find_alternatives,
         select_product,
         change_item,
+        give_feedback,
         refine_look,
         add_product_link,
         get_look,
         find_inspiration,
+        use_inspiration,
         visualize_look,
         finish_look,
     ]

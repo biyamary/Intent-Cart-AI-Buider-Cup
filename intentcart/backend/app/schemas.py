@@ -186,7 +186,8 @@ MAX_CHECKLIST_ITEMS = 10
 class LookBrief(Contract):
     occasion: Text
     description: str = Field(default="", max_length=2000)
-    total_budget_minor: int = Field(gt=0, le=100_000_000, strict=True)
+    # None while the user is still exploring ideas; a checklist needs a budget.
+    total_budget_minor: int | None = Field(default=None, gt=0, le=100_000_000, strict=True)
     currency: Literal["INR"] = "INR"
     event_date: str | None = Field(default=None, max_length=40)
     sizes: ShortText = ""
@@ -243,13 +244,42 @@ class CatalogProduct(Contract):
     match_reason: str = "Sample option for testing the look board."
     # Live products: every field below comes from the fetched page, never the model.
     price_source: Literal["catalog", "page", "user"] = "catalog"
-    verification: Literal["seed", "json_ld", "shopify", "open_graph", "user"] = "seed"
+    verification: Literal[
+        "seed", "json_ld", "shopify", "open_graph", "microdata", "page_html", "user"
+    ] = "seed"
     availability: Literal["in_stock", "out_of_stock", "unknown"] = "unknown"
     rating: float | None = Field(default=None, ge=0, le=5)
     rating_count: int | None = Field(default=None, ge=0)
     seller_label: SellerLabel = "unknown"
     seller_note: str = ""
     style_score: int | None = Field(default=None, ge=0, le=100)
+    # Shortlist-only flag: a strong match priced above the item's planned budget.
+    stretch: bool = False
+
+
+FeedbackReason = Literal[
+    "too_expensive", "wrong_colour", "too_heavy", "too_plain", "not_my_style",
+    "poor_quality_look", "wrong_item", "love_colour", "love_design", "good_price",
+]
+
+
+class ProductFeedback(Contract):
+    product_id: str = Field(max_length=40)
+    title: str = Field(default="", max_length=200)
+    colour: str = Field(default="", max_length=40)
+    price_minor: int = Field(default=0, ge=0)
+    retailer: str = Field(default="", max_length=120)
+    sentiment: Literal["like", "dislike"]
+    reasons: list[FeedbackReason] = Field(default_factory=list, max_length=6)
+    note: str = Field(default="", max_length=300)
+    created_at: str = Field(default_factory=now)
+
+
+class GiveFeedback(Contract):
+    product_id: str = Field(min_length=1, max_length=40)
+    sentiment: Literal["like", "dislike"]
+    reasons: list[FeedbackReason] = Field(default_factory=list, max_length=6)
+    note: str = Field(default="", max_length=300)
 
 
 class PriceBand(Contract):
@@ -295,6 +325,8 @@ class ChecklistItem(Contract):
     # Verified live products for this item; `candidates` is the budget-filtered shortlist.
     pool: list[CatalogProduct] = Field(default_factory=list)
     rejected_ids: list[str] = Field(default_factory=list)
+    # Per-product reactions; search and ranking learn from them on the next pass.
+    feedback: list[ProductFeedback] = Field(default_factory=list, max_length=24)
     discovery: DiscoveryStatus = "idle"
     discovery_note: str = ""
     boutiques: list[Boutique] = Field(default_factory=list, max_length=8)
@@ -384,7 +416,10 @@ class ConceptImage(Contract):
 class Look(Contract):
     id: str = Field(default_factory=new_id)
     brief: LookBrief
-    status: Literal["awaiting_checklist", "shopping", "assembled"] = "awaiting_checklist"
+    # "exploring": gathering ideas and preferences before a budget and checklist.
+    status: Literal["exploring", "awaiting_checklist", "shopping", "assembled"] = (
+        "awaiting_checklist"
+    )
     items: list[ChecklistItem]
     total_spent_minor: int = 0
     remaining_budget_minor: int = 0

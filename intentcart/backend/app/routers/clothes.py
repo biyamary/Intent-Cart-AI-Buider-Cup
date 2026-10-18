@@ -15,6 +15,7 @@ from app.schemas import (
     Alternatives,
     ChecklistItem,
     ConfirmChecklist,
+    GiveFeedback,
     ItemAction,
     Look,
     LookBrief,
@@ -54,6 +55,8 @@ async def create_look(
     service: LookService = Depends(looks),
 ):
     """Sample board look (seed catalog). Agent looks are created by the stylist."""
+    if brief.total_budget_minor is None:
+        raise HTTPException(422, "A total budget is required.")
     profile = await profile_for(store, uid)
     categories = ["outfit", "earrings", "footwear", "handbag"]
     if request.app.state.settings.agent_mode == "gemini":
@@ -228,6 +231,28 @@ async def alternatives(
     if not started:
         raise HTTPException(503, "Live product search is not available right now.")
     return await service.get(uid, look.id)
+
+
+@router.post("/looks/{look_id}/items/{item_id}/feedback", response_model=Look)
+async def feedback(
+    look_id: str,
+    item_id: str,
+    body: GiveFeedback,
+    uid: str = Depends(current_user),
+    service: LookService = Depends(looks),
+    jobs: Discovery = Depends(discovery),
+):
+    """Like or dislike one candidate; a dislike hides it and tops the shortlist up."""
+    look = await run(service.get(uid, look_id))
+    item = await run(_open_agent_item(look, item_id))
+    look = await run(service.give_feedback(
+        uid, look.id, item.id, body.product_id, body.sentiment, body.reasons, body.note
+    ))
+    updated = find_item(look, item.id)
+    if len(updated.candidates) < 2 and updated.discovery != "searching":
+        await jobs.start(uid, look.id, [item.id], request="use my feedback")
+        look = await service.get(uid, look.id)
+    return look
 
 
 @router.post("/looks/{look_id}/items/{item_id}/link", response_model=Look)

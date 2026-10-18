@@ -89,6 +89,8 @@ class ChatMessage(Contract):
     search_queries: list[str] = Field(default_factory=list)
     search_entry_point: str | None = None
     attachments: list[str] = Field(default_factory=list)
+    # Tappable answers the assistant offered for its question (sent as the user's reply).
+    suggestions: list[str] = Field(default_factory=list, max_length=5)
     request_id: UUID | None = None
     error: TurnError | None = None
     retry: RetryAdvice | None = None

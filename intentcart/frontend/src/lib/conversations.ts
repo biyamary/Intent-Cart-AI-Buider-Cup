@@ -17,6 +17,7 @@ export interface ChatMessage {
   search_queries: string[]
   search_entry_point: string | null
   attachments?: string[]
+  suggestions?: string[]
   request_id?: string | null
   error?: { code: string; message: string; diagnostic_id?: string | null } | null
   retry?: RetryAdvice | null

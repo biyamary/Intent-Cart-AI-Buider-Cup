@@ -9,17 +9,22 @@ source of truth for the brief, checklist, candidates, prices and budget.
 
 | Step | What happens | Where |
 | --- | --- | --- |
-| 1. Describe / upload | Text and/or up to 3 reference images (JPEG/PNG/WebP, 5 MB). `analyze_reference` turns them into pieces, palette and style tags | Composer attach button → ADK artifact |
-| 2. Preferences | `save_brief`: occasion, budget (required), date, sizes, colours, colours to avoid, shops, delivery city/PIN, small-business preference | Chat |
+| 1. Describe / upload | Text and/or up to 3 reference images (JPEG/PNG/WebP, 5 MB). `analyze_reference` turns them into pieces, palette and style tags (images sent at high media resolution) | Composer attach button → ADK artifact |
+| 1b. Ideas (vague request, no image) | Mira asks one or two taste questions per turn (role, vibe, colours, comfort, budget) with tappable quick replies, saves the occasion right away (the look is `exploring` until a budget is set), offers `find_inspiration`, and `use_inspiration(n)` turns a numbered idea into the reference image | Chat + board |
+| 2. Preferences | `save_brief`: occasion (required), budget (required before a checklist), date, sizes, colours, colours to avoid, shops, delivery city/PIN, retailer policy | Chat |
 | 3. Checklist | `propose_checklist` drafts items with searchable targets; user marks owned / removes / adds; confirm on the board or approve in chat (`start_shopping`) | Board + chat |
 | 4. Discover | Background ADK workflow searches, verifies product pages and ranks per item; board shows progress | Board |
-| 5. Finalise | Lock from a card or in chat (`select_product`); remaining items are re-ranked to match. "Cheaper / matching" → `find_alternatives`. Paste a link → `add_product_link` | Board + chat |
+| 5. Finalise | Lock from a card or in chat (`select_product`); remaining items are re-ranked to match. Like / not-for-me (with a reason) on each card, or in chat via `give_feedback`; *Find more using your feedback* searches again with it. "Cheaper / matching" → `find_alternatives`. Paste a link → `add_product_link` | Board + chat |
 | 6. Review | `finish_look` / *Finish my look*: products, prices, total, remaining budget, store links, styling note. Swap any single item later | Board |
 
-Imagination features run alongside: `find_inspiration` (Pinterest pins via the
-official Pin widget, plus editorial pages) and `visualize_look` (AI concept,
-edit of the user's reference photo, or a composition of the selected products),
-always labelled as AI concepts.
+Imagination features run alongside: `find_inspiration` (numbered ideas with
+images: Pinterest pins via Pinterest's public oEmbed, plus editorial and store
+pages) and `visualize_look` (AI concept, edit of the user's reference photo, or a
+composition of the selected products), always labelled as AI concepts.
+
+Quick replies: when the stylist ends a question with
+`Quick replies: A | B | C`, `grounding.split_quick_replies` strips that line into
+`ChatMessage.suggestions`, rendered as chips that send the reply.
 
 ## Architecture
 
@@ -58,16 +63,41 @@ flowchart TD
 Search only **nominates** URLs. Each candidate page is fetched (public https
 hosts only, every redirect hop re-checked) and its own structured data is read:
 schema.org Product JSON-LD, then Shopify's `/products/<handle>.js`, then
-OpenGraph product tags. A page without a title and an INR price is dropped. In
-live testing, model-cited URLs included pages that did not exist (404s) and pages
-with no readable price; neither reaches the board. Ratings and stock appear only when the page publishes them.
-Delivery dates are never promised.
+OpenGraph product tags, then schema.org microdata, and on amazon.in only,
+Amazon's own price markup (`page_html`). A page without a title and an INR price
+is dropped. A **listing page** (collection/category) is not dropped: up to 4
+product links from its schema.org ItemList (or Shopify / Flipkart / Amazon URL
+shapes, same host only) are verified in its place, for at most 3 listings per
+pass. Ratings and stock appear only when the page publishes them. Delivery dates
+are never promised.
 
-The shortlist is deterministic: within the item's budget cap, not rejected, not
-out of stock, fit score ≥ 35 (clear mismatches such as bulk gift packs are hidden),
-sorted by fit with a small-business boost, and one slot reserved for an
-independent seller when one qualifies. Only server-provided candidates can be
-locked. User-added links keep a page price, or a user-entered price shown as such.
+**Search pass, then a broader pass.** The search agent answers with a Markdown
+link list, not JSON: Gemini attaches grounding sources (the URLs search actually
+returned) only to prose answers, and drops `site:`/`OR` operators, so the prompt
+names stores in plain queries. If fewer than 6 products verify, one broader pass
+runs (synonyms, other stores, skipping what was found). In a live check on
+Vertex (`gemini-3.6-flash`), jhumkas went from 5 verified products (all
+independent, with a third of the model-written URLs 404s) to 11 (6 Myntra /
+Flipkart, 5 independent).
+
+**Search results survive board edits.** A search job's results belong to the
+newest job for that item (`Discovery._owners`), not to the plan revision, so
+selecting, removing or rejecting something elsewhere no longer throws finished
+searches away and restarts them.
+
+The shortlist is deterministic: up to 6 products within the item's budget cap,
+not rejected, not out of stock, fit score ≥ 35 (clear mismatches such as bulk
+gift packs are hidden). Liked products lead. Popular-first keeps one slot, and
+balanced two, for an independent store when one qualifies. If fewer than 6 fit
+the cap, up to 2 products with fit ≥ 60 that still fit the remaining total budget
+are added as **stretch** picks, labelled on the card. Only server-provided
+candidates can be locked. User-added links keep a page price, or a user-entered
+price shown as such.
+
+**Feedback.** `ChecklistItem.feedback` stores up to 24 likes/dislikes with
+reasons and a note. A dislike hides the product; a like pins it and keeps it in
+the pool across new searches. Every later search and ranking for the item gets
+the liked/disliked examples.
 
 ## Small businesses
 
@@ -77,14 +107,19 @@ locked. User-added links keep a page price, or a user-entered price shown as suc
 | Independent store | Own-domain store not in the marketplace/brand lists |
 | Marketplace / Brand | Domain lists in `data/sellers.json` |
 
-Search adds independent-seller queries (handmade, handloom, artisan, homegrown,
-craft names) unless the preference is "off"; "only" restricts the shortlist.
-With `STYLIST_MAPS_ENABLED=true`, `find_local_boutiques` lists Google Maps places
-near the delivery city.
+Every search mixes popular-store queries (Myntra, Amazon, Flipkart, Ajio, Nykaa
+Fashion) with independent-label queries (handmade, handloom, artisan, homegrown,
+craft names), roughly two to one. "Independent only" keeps own-domain stores
+(reviewed small businesses first) and drops marketplaces. Marketplace cards
+show the store first, e.g. "Myntra · Soch". With `STYLIST_MAPS_ENABLED=true`,
+`find_local_boutiques` lists Google Maps places near the delivery city (checked
+live on Vertex: real places with Maps links).
 
 ## Configuration
 
 ```dotenv
+GEMINI_MODEL=gemini-3.6-flash          # gemini-3.5-flash is deprecated and routed here
+GEMINI_LITE_MODEL=gemini-3.5-flash-lite # ranking; separate per-minute quota from chat
 STYLIST_AGENT_MODE=gemini
 STYLIST_SEARCH_ENABLED=true        # discovery + inspiration
 STYLIST_IMAGES_ENABLED=true        # concept images / reference edits
@@ -121,6 +156,7 @@ exceeds the 260-character limit and uploads fail with a 503.
 | POST | `/clothes/looks/{id}/items/{item}` | `lock`, `swap`, `own`, `remove`, `reopen`, `reject` |
 | POST | `/clothes/looks/{id}/items/{item}/alternatives` | Search again with a request / price ceiling |
 | POST | `/clothes/looks/{id}/items/{item}/link` | Add a product link (optional user price) |
+| POST | `/clothes/looks/{id}/items/{item}/feedback` | `{product_id, sentiment: like\|dislike, reasons[], note}` |
 | POST | `/clothes/looks/{id}/discover` | Retry discovery for open items |
 | POST | `/clothes/looks/{id}/assemble` | Finish the look with a styling note |
 
@@ -142,11 +178,16 @@ uv run python -m scripts.smoke_shop_look --images   # also a concept image
 
 ## Known limits
 
-- Large marketplaces often block page checks or render prices with JavaScript, so
-  their listings may be dropped; independent Shopify/WooCommerce stores usually
-  verify well.
-- Pinterest has no public search API; pins come from Google results and render
-  with Pinterest's widget (some may fail to embed and show as links).
+- Myntra and Flipkart product pages verify (JSON-LD), and Amazon.in does through
+  its price markup. Ajio, Nykaa Fashion and Meesho block or script their pages
+  (403 / bot checks), so their listings are usually dropped. Independent
+  Shopify/WooCommerce stores verify well.
+- Following a listing page means fetching a store's collection page that Google
+  returned. Respect each store's terms; for production, prefer official
+  affiliate/product APIs where a store offers one.
+- Pinterest has no public search API, and Google Search grounding rarely returns
+  pins, so most ideas are editorial or store pages. Pin images come from
+  Pinterest's public oEmbed endpoint.
 - Looks live in the configured Store; chat sessions and artifacts follow the
   existing single-worker/local-storage limits described in [agents.md](agents.md).
 - The phone layout (tabbed chat/board below 1100px) has not been checked on a

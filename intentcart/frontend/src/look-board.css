@@ -210,22 +210,108 @@
   object-fit: cover;
   display: block;
 }
-.reject-button {
+.card-reactions {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+  display: flex;
+  gap: 6px;
+}
+.reaction-button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
   padding: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   border-color: var(--line);
   color: #5b6b50;
 }
-.reject-button:hover {
+.reaction-button:hover:not(:disabled) {
   background: #fff0ed;
   color: #8d302d;
+}
+.reaction-button.active,
+.reaction-button.active:disabled {
+  background: #fff0ed;
+  color: #b2433f;
+  opacity: 1;
+}
+.dislike-reasons {
+  position: absolute;
+  inset: auto 8px 8px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 6px 18px rgba(24, 61, 52, 0.16);
+}
+.dislike-reasons span {
+  flex-basis: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4f5f52;
+}
+.dislike-reasons button {
+  min-height: 26px;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: #f4f2ea;
+  border-color: var(--line);
+  color: #2f3b33;
+}
+.dislike-reasons button.quiet {
+  background: transparent;
+  border-color: transparent;
+  text-decoration: underline;
+}
+.stretch-badge {
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fbf0dc;
+  color: #7a5414;
+}
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 6px;
+}
+.quick-replies button {
+  border-radius: 999px;
+}
+.idea-card {
+  position: relative;
+}
+.idea-card .pin-embed {
+  flex: none;
+}
+.idea-card figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.idea-number {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #183d34;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 24px;
+  text-align: center;
 }
 .live-card h4 {
   font-size: 13px;

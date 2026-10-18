@@ -1,5 +1,6 @@
 """Project ADK events into public messages; never expose thoughts or raw tools."""
 
+import re
 from urllib.parse import urlsplit
 
 from google.adk.events import Event
@@ -19,6 +20,26 @@ def http_url(url: str | None) -> bool:
         return parsed.scheme in {"https", "http"} and bool(parsed.hostname) and not parsed.username
     except ValueError:
         return False
+
+
+QUICK_REPLIES = re.compile(
+    r"(?:\A|\n)[ \t]*[*_]*quick replies[*_]*[ \t]*:[*_]*[ \t]*([^\n]+?)\s*\Z", re.IGNORECASE
+)
+
+
+def split_quick_replies(text: str) -> tuple[str, list[str]]:
+    """Strip a trailing "Quick replies: A | B | C" line into tappable suggestions."""
+    match = QUICK_REPLIES.search(text)
+    if not match or "\n" in match.group(1):
+        return text, []
+    options = [
+        option.strip(" *`\"'")[:60]
+        for option in match.group(1).split("|")
+        if option.strip(" *`\"'")
+    ]
+    if len(options) < 2:
+        return text, []
+    return text[: match.start()].rstrip(), list(dict.fromkeys(options))[:5]
 
 
 def public_message(event: Event, root_name: str) -> ChatMessage | None:
@@ -49,11 +70,15 @@ def public_message(event: Event, root_name: str) -> ChatMessage | None:
     )
     if not text or event.partial:
         return None
+    suggestions: list[str] = []
+    if event.author != "user":
+        text, suggestions = split_quick_replies(text)
     message = ChatMessage(
         id=event.id,
         role="user" if event.author == "user" else "assistant",
         text=text,
         created_at=event.timestamp,
+        suggestions=suggestions,
     )
     if message.role == "user":
         attachments = event.actions.state_delta.get("chat:attachments")

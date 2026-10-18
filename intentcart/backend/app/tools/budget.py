@@ -99,7 +99,7 @@ def verified_for_planning(product: CatalogProduct) -> bool:
     return (
         product.source == "live"
         and product.price_source == "page"
-        and product.verification in {"json_ld", "shopify", "open_graph"}
+        and product.verification in {"json_ld", "shopify", "open_graph", "microdata", "page_html"}
         and product.price_minor > 0
         and product.availability != "out_of_stock"
         and (product.style_score is None or product.style_score >= 35)
@@ -177,6 +177,14 @@ def allocate_budget(look: Look) -> Look:
         for item in look.items
         if item.status == "locked" and item.chosen_product
     )
+    if look.brief.total_budget_minor is None:
+        # Still exploring ideas: nothing to split until the user names a budget.
+        look.total_spent_minor, look.remaining_budget_minor = spent, 0
+        look.budget_plan = BudgetPlan(
+            revision=look.plan_revision,
+            note="Share a total budget to plan the look.",
+        )
+        return look
     remaining = look.brief.total_budget_minor - spent
     if remaining < 0:
         raise ValueError("Selected products exceed the total budget.")

@@ -7,9 +7,11 @@ import pytest
 from app.clothes.pages import (
     FetchResult,
     fetch_public,
+    listing_links,
     normalise_url,
     parse_price,
     parse_product_page,
+    read_page,
     read_product,
     shopify_handle_url,
 )
@@ -112,6 +114,73 @@ def test_read_product_uses_shopify_price_with_page_currency():
     assert missing is None and why == "http_404"
 
 
+AMAZON_HTML = (
+    '<html><head><title>Amazon.in</title></head><body>'
+    '<span id="productTitle" class="a-size-large">  Women Rayon Anarkali Kurta Set  </span>'
+    '<script>{"priceAmount":649.00,"currencySymbol":"₹","integerValue":"649"}</script>'
+    '<script>{"hiRes":"https://m.media-amazon.com/images/I/71abc._SL1500_.jpg"}</script>'
+    '<span id="acrPopover" title="4.1 out of 5 stars"></span>'
+    '<span id="acrCustomerReviewText">(10,723)</span></body></html>'
+)
+
+
+def test_amazon_price_markup_is_read_only_on_amazon_india():
+    facts, _ = parse_product_page(AMAZON_HTML, "https://www.amazon.in/dp/B0FDW6BD6C")
+    assert facts.is_product and facts.verification == "page_html"
+    assert facts.title == "Women Rayon Anarkali Kurta Set" and facts.price_minor == 64900
+    assert facts.image_url.startswith("https://m.media-amazon.com/")
+    assert (facts.rating, facts.rating_count) == (4.1, 10723)
+    # The same markup on any other host is not trusted as a price.
+    other, _ = parse_product_page(AMAZON_HTML, "https://amazon-deals.example/dp/B0FDW6BD6C")
+    assert other.price_minor is None
+
+
+def test_microdata_and_shopify_store_currency():
+    microdata = (
+        '<html><head><meta property="og:title" content="Kundan choker"></head><body>'
+        '<span itemprop="price" content="1499.00">₹1,499</span>'
+        '<meta itemprop="priceCurrency" content="INR"></body></html>'
+    )
+    facts, _ = parse_product_page(microdata, "https://indie.example.in/choker")
+    assert facts.is_product and facts.price_minor == 149900 and facts.verification == "microdata"
+    shopify = page(meta={"og:title": "Potli", "og:price:amount": "899"}).replace(
+        "</body>", '<script>Shopify.currency = {"active":"INR","rate":"1.0"};</script></body>'
+    )
+    facts, _ = parse_product_page(shopify, "https://indie.example.in/products/potli")
+    assert facts.is_product and facts.currency == "INR"
+
+
+def test_listing_pages_yield_same_host_product_links():
+    item_list = page(
+        ld={
+            "@context": "https://schema.org",
+            "@type": "ItemList",
+            "itemListElement": [
+                {"@type": "ListItem", "position": 1, "url": "https://www.myntra.com/sets/a/1/buy"},
+                {"@type": "ListItem", "position": 2, "url": "https://evil.example/products/x"},
+                {"@type": "ListItem", "position": 3, "item": {"url": "/sets/b/2/buy"}},
+            ],
+        }
+    )
+    url = "https://www.myntra.com/kurta-sets"
+    fetch = fake_fetcher({url: FetchResult(True, url, url, 200, "text/html", item_list)})
+    facts, reason, links = asyncio.run(read_page(url, fetch))
+    assert facts is None and reason == "listing"
+    assert links == ["https://www.myntra.com/sets/a/1/buy", "https://www.myntra.com/sets/b/2/buy"]
+    # Without an ItemList, Shopify and Amazon product URL shapes are recognised.
+    hrefs = (
+        '<a href="/collections/sets/products/green-suit">x</a>'
+        '<a href="/products/green-suit">dup</a><a href="/pages/about">no</a>'
+    )
+    assert listing_links(hrefs, "https://www.libas.in/collections/sets") == [
+        "https://www.libas.in/products/green-suit"
+    ]
+    amazon = '<a href="/Some-Kurta/dp/B0FDW6BD6C/ref=sr_1">k</a>'
+    assert listing_links(amazon, "https://www.amazon.in/s?k=kurta") == [
+        "https://www.amazon.in/dp/B0FDW6BD6C"
+    ]
+
+
 def test_fetch_public_blocks_private_hosts_on_every_redirect_hop():
     def handler(request: httpx.Request):
         if request.url.host == "public.example":
@@ -153,4 +222,20 @@ def test_truncated_search_json_still_yields_urls():
     assert urls_in(truncated) == [
         "https://a.in/products/x",
         "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZ_-a=",
+    ]
+
+
+def test_markdown_link_list_from_search_yields_urls():
+    from app.clothes.agent_calls import parse_json, urls_in
+
+    # Grounded answers keep their sources only as prose, so search answers with links.
+    answer = (
+        "- [I Jewels Oxidised Jhumka](https://vertexaisearch.cloud.google.com/"
+        "grounding-api-redirect/AUZIYQE_x-1=) - Myntra\n"
+        "- [Pearl jhumka](https://handmade.example.in/products/pearl-jhumka) - Handmade\n"
+    )
+    assert parse_json(answer) is None
+    assert urls_in(answer) == [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQE_x-1=",
+        "https://handmade.example.in/products/pearl-jhumka",
     ]

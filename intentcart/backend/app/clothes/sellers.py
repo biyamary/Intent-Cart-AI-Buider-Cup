@@ -23,6 +23,23 @@ POPULAR_RETAILERS = (
 )
 
 
+STORE_NAMES = {
+    "myntra.com": "Myntra",
+    "amazon.in": "Amazon.in",
+    "ajio.com": "AJIO",
+    "flipkart.com": "Flipkart",
+    "nykaafashion.com": "Nykaa Fashion",
+    "tatacliq.com": "Tata CLiQ",
+    "shopsy.in": "Shopsy",
+    "meesho.com": "Meesho",
+}
+
+
+def store_name(url: str) -> str | None:
+    """Display name of a popular store, e.g. "Myntra" for a myntra.com page."""
+    return STORE_NAMES.get(_matches(host_of(url), STORE_NAMES) or "")
+
+
 @dataclass(frozen=True)
 class Registry:
     marketplaces: frozenset[str]
