@@ -111,6 +111,16 @@ def parse_json(text: Any) -> Any:
 
 
 URL_RE = re.compile(r"https://[^\s\"'<>()\[\]{}]+")
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]{0,200})\]\((https://[^\s()]+)\)")
+
+
+def markdown_links(text: Any) -> list[tuple[str, str]]:
+    """(title, url) pairs from Markdown links, in order.
+
+    Grounded answers keep their search sources only when the model answers in
+    prose, so search specialists answer with Markdown link lists, not JSON.
+    """
+    return [(title.strip(), url) for title, url in MARKDOWN_LINK_RE.findall(str(text or ""))]
 
 
 def urls_in(text: Any) -> list[str]:

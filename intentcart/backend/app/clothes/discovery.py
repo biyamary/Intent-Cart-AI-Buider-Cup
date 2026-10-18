@@ -4,13 +4,19 @@
       discover_look ── fan-out, one isolated sub-branch per checklist item ──┐
         discover_item                                                         │
           product_search_N  (LlmAgent + google_search; grounding captured)    │
-          verify_candidates (function node: fetch + parse product pages)      │
-          candidate_ranker  (LlmAgent, structured scores vs. locked pieces)   │
+          verify_candidates (function node: fetch + parse product pages,      │
+                             following product links on listing pages)        │
+          product_search_N_more (only when too few products verified:         │
+                             broader queries, other stores)                   │
+          candidate_ranker  (LlmAgent, structured scores vs. locked pieces    │
+                             and the user's likes/dislikes)                   │
           -> writes the item's pool/progress to the look as soon as it ends ◄─┘
 
 Search only nominates URLs. Prices, images, stock and ratings come from the
 fetched pages (see pages.py); the shortlist and budget filter are deterministic
 (see service.py). Jobs run in the background so a chat turn never waits on them.
+A search job's results are owned by the newest job for that item, not by the
+plan revision: board edits elsewhere no longer throw finished searches away.
 """
 
 import asyncio
@@ -31,18 +37,33 @@ from app.agents.base import AgentDefinition, create_agent
 from app.agents.privacy import adk_app
 from app.agents.schemas import RankResult
 from app.clothes.agent_calls import Source, collect_grounding, parse_json, urls_in
-from app.clothes.pages import Fetcher, PageFacts, fetch_public, host_of, read_product
-from app.clothes.sellers import classify, is_store_url, small_business_domains
-from app.clothes.service import MIN_FIT, LookError, LookService, product_id
+from app.clothes.pages import Fetcher, PageFacts, fetch_public, host_of, read_page
+from app.clothes.sellers import (
+    classify,
+    is_store_url,
+    popular_retailer_domains,
+    small_business_domains,
+    store_name,
+)
+from app.clothes.service import MIN_FIT, STRETCH_FIT, LookError, LookService, product_id
 from app.config import Settings
 from app.schemas import CatalogProduct, ChecklistItem, Look
 
 logger = logging.getLogger(__name__)
 
-MAX_URLS_PER_ITEM = 12
+MAX_URLS_PER_ITEM = 16
 FETCH_CONCURRENCY = 6
 # Items searched at once; keeps grounding requests under per-minute quotas.
 SEARCH_CONCURRENCY = 3
+# Fewer verified products than this after the first search triggers one broader search.
+TARGET_VERIFIED = 6
+# Listing pages followed per search pass, and product links read from each.
+MAX_LISTINGS = 3
+LINKS_PER_LISTING = 4
+# Candidates scored in one ranking call (matches RankResult's limit).
+MAX_RANKED = 40
+# URL path shapes that usually mean "one product" on Indian stores and Shopify.
+PRODUCT_PATH_HINTS = ("/products/", "/p/", "/dp/", "/buy", "/product/", "/item/")
 
 
 MISS_LABELS = {
@@ -52,7 +73,32 @@ MISS_LABELS = {
     "not_inr": "not priced in INR",
     "http_403": "blocked our check",
     "http_404": "page not found",
+    "listing": "listing page",
 }
+
+
+def product_first(urls: list[str]) -> list[str]:
+    """Stable order with likely product pages ahead of other model-written URLs."""
+    return sorted(urls, key=lambda u: 0 if any(h in u for h in PRODUCT_PATH_HINTS) else 1)
+
+
+def feedback_context(item: ChecklistItem) -> dict:
+    """The user's reactions to earlier candidates, for search and ranking."""
+
+    def entry(f):
+        return {
+            "title": f.title,
+            "colour": f.colour,
+            "price_inr": rupees(f.price_minor),
+            "store": f.retailer,
+            "reasons": f.reasons,
+            "note": f.note,
+        }
+
+    return {
+        "liked": [entry(f) for f in item.feedback if f.sentiment == "like"][-6:],
+        "disliked": [entry(f) for f in item.feedback if f.sentiment == "dislike"][-8:],
+    }
 
 
 def miss_summary(misses: dict[str, int]) -> str:
@@ -66,12 +112,16 @@ def rupees(minor: int) -> int:
 
 def to_product(facts: PageFacts, category: str) -> CatalogProduct:
     label, note = classify(facts.url)
+    seller = facts.seller_name or host_of(facts.url)
+    # On a marketplace the page names the brand; lead with where it is sold.
+    if (store := store_name(facts.url)) and store.lower() not in seller.lower():
+        seller = f"{store} · {seller}"
     return CatalogProduct(
         id=product_id(facts.url),
         category=category,
         title=facts.title[:200],
         price_minor=facts.price_minor or 0,
-        retailer=facts.seller_name or host_of(facts.url),
+        retailer=seller[:120],
         url=facts.url,
         image_url=facts.image_url,
         colour=facts.colour,
@@ -168,6 +218,7 @@ class Discovery:
         job = uuid4().hex
         for item_id in ids:
             self._owners[(look_id, item_id)] = job
+        # No plan revision: job ownership alone decides whether results may be written.
         self._spawn(self._run(uid, look_id, ids, "search", request, max_price_minor, job))
         return ids
 
@@ -181,7 +232,9 @@ class Discovery:
         look = await self.looks.get(uid, look_id)
         ids = [i.id for i in look.items if i.status == "open" and len(i.pool) > 1]
         if ids:
-            self._spawn(self._run(uid, look_id, ids, "rank", "", None))
+            self._spawn(self._run(
+                uid, look_id, ids, "rank", "", None, None, look.plan_revision
+            ))
 
     async def wait_idle(self) -> None:
         """Test/shutdown helper: wait for running jobs."""
@@ -199,27 +252,38 @@ class Discovery:
         task.add_done_callback(self._tasks.discard)
 
     # ------------------------------------------------------------------ job
-    async def _run(self, uid, look_id, item_ids, mode, request, max_price_minor, job=None) -> None:
+    async def _run(
+        self, uid, look_id, item_ids, mode, request, max_price_minor,
+        job=None, plan_revision: int | None = None,
+    ) -> None:
         try:
             async with asyncio.timeout(self.settings.discovery_timeout_seconds):
                 look = await self.looks.get(uid, look_id)
+                if plan_revision is not None and look.plan_revision != plan_revision:
+                    return
                 specs = [
                     self._spec(look, item, mode, request, max_price_minor)
                     for item in look.items
                     if item.id in item_ids and item.status == "open"
                 ]
                 if specs:
-                    await self._execute(self._workflow(uid, look_id, specs, job), uid)
+                    await self._execute(
+                        self._workflow(uid, look_id, specs, job, plan_revision), uid
+                    )
         except Exception as error:  # noqa: BLE001 -- background job; never log payloads
             logger.warning("Discovery job failed: mode=%s error_type=%s", mode, type(error).__name__)
         finally:
             if mode == "search":
-                await self._fail_unfinished(uid, look_id, item_ids, job)
+                await self._fail_unfinished(
+                    uid, look_id, item_ids, job, plan_revision
+                )
                 for item_id in item_ids:
                     if self._owners.get((look_id, item_id)) == job:
                         del self._owners[(look_id, item_id)]
 
-    async def _fail_unfinished(self, uid, look_id, item_ids, job) -> None:
+    async def _fail_unfinished(
+        self, uid, look_id, item_ids, job, plan_revision: int | None = None
+    ) -> None:
         try:
             look = await self.looks.get(uid, look_id)
         except LookError:
@@ -232,6 +296,7 @@ class Discovery:
                 await self.looks.apply_discovery(
                     uid, look_id, item.id, status="failed",
                     note="The search did not finish. Ask the stylist or press retry.",
+                    expected_plan_revision=plan_revision,
                 )
 
     def _spec(self, look: Look, item: ChecklistItem, mode, request, max_price_minor) -> dict:
@@ -246,12 +311,19 @@ class Discovery:
             "hints": item.hints,
             "request": request,
             "cap_minor": cap,
+            "search_cap_minor": (
+                min(look.remaining_budget_minor, max_price_minor)
+                if max_price_minor else
+                look.remaining_budget_minor if mode == "search" and not item.pool else cap
+            ),
             "max_price_minor": max_price_minor,
-            "preference": look.brief.small_business,
+            "retailer_policy": look.brief.retailer_policy,
             "brief": brief_context(look),
             "locked": locked_pieces(look),
             "pool": [p.model_dump(mode="json") for p in item.pool] if mode == "rank" else [],
             "rejected": item.rejected_ids,
+            "feedback": feedback_context(item),
+            "remaining_minor": look.remaining_budget_minor,
         }
 
     async def _execute(self, workflow: Workflow, uid: str) -> None:
@@ -271,10 +343,10 @@ class Discovery:
             await runner.close()
 
     # ------------------------------------------------------------------ workflow
-    def _search_agent(self, index: int, sources: list[Source]):
+    def _search_agent(self, name: str, sources: list[Source]):
         agent = create_agent(
             AgentDefinition(
-                f"product_search_{index}",
+                name,
                 "Finds product pages for one outfit item with Google Search.",
                 "stylist_search.md",
             ),
@@ -299,14 +371,24 @@ class Discovery:
             output_schema=RankResult,
             conversational=True,
             retry_attempts=4,
+            # Scoring titles against a brief needs little reasoning; keep it fast and cheap.
+            thinking_level=types.ThinkingLevel.LOW,
         )
 
     def _workflow(
-        self, uid: str, look_id: str, specs: list[dict], job: str | None = None
+        self,
+        uid: str,
+        look_id: str,
+        specs: list[dict],
+        job: str | None = None,
+        plan_revision: int | None = None,
     ) -> Workflow:
-        sources = {spec["item_id"]: [] for spec in specs}
+        sources = {spec["item_id"]: ([], []) for spec in specs}
         searchers = {
-            spec["item_id"]: self._search_agent(n, sources[spec["item_id"]])
+            spec["item_id"]: (
+                self._search_agent(f"product_search_{n}", sources[spec["item_id"]][0]),
+                self._search_agent(f"product_search_{n}_more", sources[spec["item_id"]][1]),
+            )
             for n, spec in enumerate(specs)
         }
         ranker = self._ranker()
@@ -315,23 +397,53 @@ class Discovery:
         search_slots = asyncio.Semaphore(SEARCH_CONCURRENCY)
 
         async def verify_candidates(ctx: Context, node_input: dict) -> dict:
-            """Fetch each nominated URL; keep only pages with verifiable INR prices."""
+            """Fetch each nominated URL; keep only pages with verifiable INR prices.
 
-            async def one(url):
-                async with semaphore:
-                    return await read_product(url, fetch)
+            A listing page (collection/category) is followed: the first few
+            product pages it names are verified in its place.
+            """
 
-            results = await asyncio.gather(*(one(u) for u in node_input["urls"]))
-            products, misses, seen = [], {}, set()
-            for facts, reason in results:
-                if facts is None:
-                    misses[reason] = misses.get(reason, 0) + 1
-                    continue
-                if facts.url in seen or not is_store_url(facts.url):
-                    continue
-                seen.add(facts.url)
-                products.append(to_product(facts, node_input["category"]).model_dump(mode="json"))
-            return {"products": products, "checked": len(node_input["urls"]), "misses": misses}
+            async def read_all(urls):
+                async def one(url):
+                    async with semaphore:
+                        return await read_page(url, fetch)
+
+                return await asyncio.gather(*(one(u) for u in urls))
+
+            skip = set(node_input.get("skip", []))
+            urls = [u for u in node_input["urls"] if u not in skip]
+            products, misses, seen, followed = [], {}, set(skip), []
+
+            def collect(results):
+                for facts, reason, links in results:
+                    if facts is None:
+                        misses[reason] = misses.get(reason, 0) + 1
+                        if links and len(followed) < MAX_LISTINGS:
+                            followed.append(links)
+                        continue
+                    if facts.url in seen or not is_store_url(facts.url):
+                        continue
+                    seen.add(facts.url)
+                    products.append(
+                        to_product(facts, node_input["category"]).model_dump(mode="json")
+                    )
+
+            collect(await read_all(urls))
+            extra = [
+                link
+                for links in followed
+                for link in [u for u in links if u not in seen and u not in urls][
+                    :LINKS_PER_LISTING
+                ]
+            ]
+            if extra:
+                collect(await read_all(list(dict.fromkeys(extra))))
+            return {
+                "products": products,
+                "checked": len(urls) + len(extra),
+                "misses": misses,
+                "urls": urls + extra,
+            }
 
         @node(rerun_on_resume=True)
         async def discover_item(ctx: Context, node_input: dict):
@@ -362,7 +474,10 @@ class Discovery:
                 return {"item_id": item_id, "found": 0}
 
             if spec["mode"] == "rank":
-                await looks.set_scores(uid, look_id, item_id, scores)
+                await looks.set_scores(
+                    uid, look_id, item_id, scores,
+                    expected_plan_revision=plan_revision,
+                )
                 return {"item_id": item_id, "found": len(products)}
 
             if not self.owns(look_id, item_id, job):
@@ -376,8 +491,19 @@ class Discovery:
             pool.sort(key=lambda p: (-(p.style_score or 0), p.price_minor))
             fitting = [p for p in pool if p.style_score is None or p.style_score >= MIN_FIT]
             within = [p for p in fitting if p.price_minor <= spec["cap_minor"]]
+            # Mirrors the shortlist's stretch rule, so "ready" always means cards to show.
+            affordable = [
+                p for p in fitting
+                if p.price_minor <= spec["remaining_minor"] and (p.style_score or 0) >= STRETCH_FIT
+            ]
             if within:
                 status, note = "ready", f"Checked {checked} pages; {len(pool)} verified products."
+            elif affordable:
+                status = "ready"
+                note = (
+                    f"Closest matches are above this item's planned "
+                    f"₹{rupees(spec['cap_minor']):,}; they still fit your total budget."
+                )
             elif fitting:
                 status = "no_results"
                 note = (
@@ -392,8 +518,11 @@ class Discovery:
                 note = f"Checked {checked} pages; none showed a verifiable INR price."
                 if misses := found.get("misses") if spec["mode"] == "search" else None:
                     note += " " + miss_summary(misses)
+            # A thin new search keeps earlier verified options as fallbacks behind it;
+            # liked and user-added products always survive (see apply_discovery).
             await looks.apply_discovery(
-                uid, look_id, item_id, status=status, pool=pool, note=note, replace=True
+                uid, look_id, item_id, status=status, pool=pool, note=note,
+                replace=len(pool) >= TARGET_VERIFIED,
             )
             return {"item_id": item_id, "found": len(pool)}
 
@@ -406,15 +535,52 @@ class Discovery:
 
         return Workflow(name="look_discovery", edges=[("START", discover_look)])
 
-    async def _search(self, ctx, spec, searcher, sources, verify_candidates) -> dict:
+    async def _search(self, ctx, spec, searchers, sources, verify_candidates) -> dict:
+        """First pass, then one broader pass only if too few products verified."""
+        first, more = searchers
         payload = {
+            "pass": "first",
             "item": {"category": spec["category"], "target": spec["target"], "hints": spec["hints"]},
             "latest_request": spec["request"],
+            "feedback": spec["feedback"],
             "brief": spec["brief"],
-            "price_ceiling_inr": rupees(spec["cap_minor"]),
-            "small_business_preference": spec["preference"],
-            "favour_domains": small_business_domains() if spec["preference"] != "off" else [],
+            "price_ceiling_inr": rupees(spec["search_cap_minor"]),
+            "planned_item_budget_inr": rupees(spec["cap_minor"]),
+            "retailer_policy": spec["retailer_policy"],
+            "preferred_retailers": spec["brief"].get("platforms", []),
+            "popular_domains": popular_retailer_domains(),
+            "reviewed_small_business_domains": small_business_domains(),
         }
+        found = await self._search_pass(
+            ctx, first, sources[0], payload, verify_candidates, spec, []
+        )
+        if len(found["products"]) >= TARGET_VERIFIED:
+            return found
+        payload |= {
+            "pass": "broader",
+            "already_found": [
+                {"title": p["title"], "store": host_of(p["url"] or "")}
+                for p in found["products"]
+            ],
+            "stores_already_tried": sorted({host_of(u) for u in found["urls"]} - {""}),
+        }
+        extra = await self._search_pass(
+            ctx, more, sources[1], payload, verify_candidates, spec, found["urls"]
+        )
+        misses = dict(found["misses"])
+        for reason, count in extra["misses"].items():
+            misses[reason] = misses.get(reason, 0) + count
+        known = {p["id"] for p in found["products"]}
+        return {
+            "products": found["products"] + [p for p in extra["products"] if p["id"] not in known],
+            "checked": found["checked"] + extra["checked"],
+            "misses": misses,
+            "urls": found["urls"] + extra["urls"],
+        }
+
+    async def _search_pass(
+        self, ctx, searcher, sources, payload, verify_candidates, spec, skip: list[str]
+    ) -> dict:
         text = await ctx.run_node(searcher, json.dumps(payload), use_sub_branch=True)
         data = parse_json(text)
         if isinstance(data, dict):
@@ -428,12 +594,13 @@ class Discovery:
             nominated = urls_in(text)
         # Grounding redirects are what the provider actually retrieved; model-written URLs
         # may be wrong, which the verifier will reveal.
-        urls = list(dict.fromkeys(u for u in nominated + [s.uri for s in sources] if u))
-        urls = urls[:MAX_URLS_PER_ITEM]
+        retrieved = [s.uri for s in sources]
+        urls = list(dict.fromkeys(u for u in product_first(nominated) + retrieved if u))
+        urls = [u for u in urls if u not in skip][:MAX_URLS_PER_ITEM]
         if not urls:
-            return {"products": [], "checked": 0}
+            return {"products": [], "checked": 0, "misses": {}, "urls": []}
         return await ctx.run_node(
-            verify_candidates, {"urls": urls, "category": spec["category"]}
+            verify_candidates, {"urls": urls, "category": spec["category"], "skip": skip}
         )
 
     async def _rank(self, ctx, ranker, spec, products: list[dict]) -> dict[str, tuple[int, str]]:
@@ -442,6 +609,7 @@ class Discovery:
             "item": {"category": spec["category"], "target": spec["target"], "hints": spec["hints"]},
             "latest_request": spec["request"],
             "locked_pieces": spec["locked"],
+            "user_feedback": spec["feedback"],
             "candidates": [
                 {
                     "id": p["id"],
@@ -450,7 +618,7 @@ class Discovery:
                     "seller": p["seller_label"],
                     "colour": p.get("colour", ""),
                 }
-                for p in products
+                for p in products[:MAX_RANKED]
             ],
         }
         result = parse_json(await ctx.run_node(ranker, json.dumps(payload), use_sub_branch=True))

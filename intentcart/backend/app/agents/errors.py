@@ -4,9 +4,18 @@ import math
 import re
 from dataclasses import dataclass
 
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.auth.exceptions import GoogleAuthError
+from google.auth.exceptions import TransportError as GoogleTransportError
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import (
+    ClientError,
+    FunctionInvocationError,
+    ServerError,
+    UnknownApiResponseError,
+    UnknownFunctionCallArgumentError,
+    UnsupportedFunctionError,
+)
 from httpx import TransportError
 from pydantic import ValidationError
 
@@ -17,6 +26,8 @@ class AgentFailure:
     detail: str
     reason: str
     retry_after: int | None = None
+    retryable: bool = True
+    diagnostic_id: str | None = None
 
 
 class StructuredResponseError(Exception):
@@ -91,6 +102,7 @@ def _quota_failure(error: ClientError) -> AgentFailure:
             "or Google Cloud Console (Vertex AI). "
             "Retrying immediately will not resolve a zero quota.",
             "quota_zero",
+            retryable=False,
         )
 
     quota_ids = [str(item.get("quotaId", "")).lower() for item in violations]
@@ -129,30 +141,91 @@ def _adc_failure() -> AgentFailure:
         "gcloud auth application-default login and set the ADC quota project to "
         "GOOGLE_CLOUD_PROJECT. Verify that the account has access to that project.",
         "provider_auth",
+        retryable=False,
     )
 
 
-def describe_agent_error(error: Exception) -> AgentFailure:
+def _provider_retry_after(error: Exception) -> int | None:
+    response = getattr(error, "response", None)
+    if response is None:
+        return None
+    delay = response.headers.get("Retry-After", "")
+    return max(1, int(delay)) if re.fullmatch(r"\d{1,9}", delay) else None
+
+
+def describe_agent_error(error: Exception, subject: str = "The assistant") -> AgentFailure:
+    if isinstance(error, (GoogleTransportError, TransportError)):
+        return AgentFailure(
+            502,
+            "The server temporarily lost its connection to Gemini. Your conversation and any "
+            "completed planning steps are saved; please retry.",
+            "provider_connection",
+        )
     if isinstance(error, GoogleAuthError):
         return _adc_failure()
+    if isinstance(error, LlmCallsLimitExceededError):
+        return AgentFailure(
+            502,
+            f"{subject} needed more steps than one reply allows. Your conversation is saved; "
+            "try a narrower question, such as one product or flavour.",
+            "step_limit",
+        )
     if isinstance(error, TimeoutError):
         return AgentFailure(
             504,
-            "The stylist took too long to reply. Your conversation is saved; send a follow-up to continue.",
+            f"{subject} took too long to reply. Your conversation is saved; send a follow-up to continue.",
             "timeout",
         )
     if isinstance(error, ClientError) and error.code == 429:
         return _quota_failure(error)
+    if isinstance(error, ServerError) or (
+        isinstance(error, ClientError) and isinstance(error.code, int) and error.code >= 500
+    ):
+        retry_after = _provider_retry_after(error)
+        return AgentFailure(
+            503,
+            "Gemini was temporarily unavailable. Your conversation and any completed planning "
+            "steps are saved; please retry in a moment.",
+            "provider_unavailable",
+            retry_after=retry_after,
+        )
     if isinstance(error, ClientError) and error.code in {400, 401, 403, 404}:
         return AgentFailure(
             502,
             "Gemini could not start this request. Check the server's credentials, project "
             "permissions, enabled API, model access and Google Search support.",
             "provider_configuration",
+            retryable=False,
         )
+    if isinstance(
+        error,
+        (FunctionInvocationError, UnknownFunctionCallArgumentError, UnsupportedFunctionError),
+    ):
+        return AgentFailure(
+            502,
+            f"{subject} could not complete one of the requested actions. Any completed planning "
+            "steps are saved; please retry.",
+            "tool_protocol_failure",
+        )
+    if isinstance(error, UnknownApiResponseError):
+        return AgentFailure(
+            502,
+            "Gemini returned an unreadable response. Your conversation and any completed planning "
+            "steps are saved; please retry.",
+            "invalid_provider_response",
+        )
+    if isinstance(error, StructuredResponseError):
+        messages = {
+            "empty_response": "Gemini returned no readable reply. Any completed planning steps are saved; please retry.",
+            "response_truncated": "Gemini reached its output limit before completing the reply. Please retry with a shorter request.",
+            "response_blocked": "Gemini did not return a reply for this request. Try rephrasing it.",
+            "model_response_error": "Gemini reported an error instead of a completed reply. Please retry.",
+        }
+        if error.reason in messages:
+            return AgentFailure(502, messages[error.reason], error.reason)
     return AgentFailure(
         502,
-        "The stylist could not complete that reply. Your conversation is saved; please try again.",
+        f"{subject} could not complete that reply. Your conversation is saved; please try again.",
         "provider_failure",
     )
 

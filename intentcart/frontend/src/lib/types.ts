@@ -113,13 +113,32 @@ export interface Product {
   price_fetched_at: string | null
   match_reason: string
   price_source?: 'catalog' | 'page' | 'user'
-  verification?: 'seed' | 'json_ld' | 'shopify' | 'open_graph' | 'user'
+  verification?: 'seed' | 'json_ld' | 'shopify' | 'open_graph' | 'microdata' | 'page_html' | 'user'
   availability?: 'in_stock' | 'out_of_stock' | 'unknown'
   rating?: number | null
   rating_count?: number | null
   seller_label?: SellerLabel
   seller_note?: string
   style_score?: number | null
+  stretch?: boolean
+}
+export type FeedbackReason =
+  | 'too_expensive'
+  | 'wrong_colour'
+  | 'too_heavy'
+  | 'too_plain'
+  | 'not_my_style'
+  | 'poor_quality_look'
+  | 'wrong_item'
+  | 'love_colour'
+  | 'love_design'
+  | 'good_price'
+export interface ProductFeedback {
+  product_id: string
+  title: string
+  sentiment: 'like' | 'dislike'
+  reasons: FeedbackReason[]
+  note: string
 }
 export interface Boutique {
   name: string
@@ -128,6 +147,24 @@ export interface Boutique {
   kind: 'local' | 'online'
 }
 export type DiscoveryStatus = 'idle' | 'searching' | 'ready' | 'no_results' | 'failed'
+export type RetailerPolicy = 'popular_first' | 'balanced' | 'independent_first' | 'independent_only'
+export interface PriceBand {
+  low_minor: number
+  typical_minor: number
+  high_minor: number
+  sample_count: number
+  source: 'fallback' | 'market' | 'selected'
+}
+export interface BudgetPlan {
+  revision: number
+  status: 'estimating' | 'surveying' | 'ready' | 'infeasible'
+  feasible: boolean | null
+  minimum_complete_total_minor: number
+  planned_total_minor: number
+  verified_item_count: number
+  open_item_count: number
+  note: string
+}
 export interface ChecklistItem {
   id: string
   category: Category
@@ -140,6 +177,12 @@ export interface ChecklistItem {
   discovery?: DiscoveryStatus
   discovery_note?: string
   boutiques?: Boutique[]
+  budget_role?: string
+  price_band?: PriceBand
+  planned_budget_minor?: number
+  reserved_product_id?: string | null
+  survey_status?: 'pending' | 'surveying' | 'ready' | 'no_verified_prices' | 'not_needed'
+  feedback?: ProductFeedback[]
 }
 export interface InspirationItem {
   id: string
@@ -167,7 +210,8 @@ export interface Look {
   brief: {
     occasion: string
     description: string
-    total_budget_minor: number
+    /** null while an agent look is still in the ideas stage. */
+    total_budget_minor: number | null
     currency: string
     event_date: string | null
     sizes?: string
@@ -177,8 +221,9 @@ export interface Look {
     delivery_city?: string
     delivery_pin?: string
     small_business?: 'off' | 'prefer' | 'only'
+    retailer_policy?: RetailerPolicy
   }
-  status: 'awaiting_checklist' | 'shopping' | 'assembled'
+  status: 'exploring' | 'awaiting_checklist' | 'shopping' | 'assembled'
   items: ChecklistItem[]
   total_spent_minor: number
   remaining_budget_minor: number
@@ -191,6 +236,8 @@ export interface Look {
   inspiration?: InspirationItem[]
   concepts?: ConceptImage[]
   revision?: number
+  budget_plan?: BudgetPlan
+  plan_revision?: number
 }
 export const money = (minor: number) =>
   new Intl.NumberFormat('en-IN', {

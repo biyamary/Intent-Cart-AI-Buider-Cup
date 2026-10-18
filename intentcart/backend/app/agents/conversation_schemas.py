@@ -36,6 +36,48 @@ class Citation(Contract):
     source_indices: list[int]
 
 
+class RetryAdvice(Contract):
+    allowed: bool
+    after_seconds: int | None = None
+    use_new_request_id: bool = True
+
+
+class TurnError(Contract):
+    code: str
+    message: str
+    diagnostic_id: str | None = None
+
+
+TurnPhase = Literal["queued", "running", "succeeded", "failed"]
+ProgressStage = Literal[
+    "queued",
+    "understanding",
+    "planning",
+    "searching",
+    "researching",
+    "preparing",
+    "complete",
+    "failed",
+]
+
+
+class TurnProgress(Contract):
+    stage: ProgressStage
+    label: str
+
+
+class TurnStatus(Contract):
+    request_id: UUID
+    agent_id: str
+    session_id: str
+    status: TurnPhase
+    progress: TurnProgress
+    created_at: float
+    updated_at: float
+    error: TurnError | None = None
+    retry: RetryAdvice | None = None
+
+
 class ChatMessage(Contract):
     id: str
     role: Literal["user", "assistant"]
@@ -47,6 +89,11 @@ class ChatMessage(Contract):
     search_queries: list[str] = Field(default_factory=list)
     search_entry_point: str | None = None
     attachments: list[str] = Field(default_factory=list)
+    # Tappable answers the assistant offered for its question (sent as the user's reply).
+    suggestions: list[str] = Field(default_factory=list, max_length=5)
+    request_id: UUID | None = None
+    error: TurnError | None = None
+    retry: RetryAdvice | None = None
 
 
 class ConversationSummary(Contract):
@@ -54,6 +101,11 @@ class ConversationSummary(Contract):
     agent_id: str
     title: str
     updated_at: float
+
+
+class DeletedConversations(Contract):
+    conversations: int
+    looks: int
 
 
 class Conversation(ConversationSummary):

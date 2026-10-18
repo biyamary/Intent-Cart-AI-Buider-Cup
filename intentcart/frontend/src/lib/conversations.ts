@@ -1,3 +1,5 @@
+import type { RetryAdvice } from './agentTurns'
+
 export interface AgentInfo {
   id: string
   name: string
@@ -15,6 +17,10 @@ export interface ChatMessage {
   search_queries: string[]
   search_entry_point: string | null
   attachments?: string[]
+  suggestions?: string[]
+  request_id?: string | null
+  error?: { code: string; message: string; diagnostic_id?: string | null } | null
+  retry?: RetryAdvice | null
 }
 export interface ConversationSummary {
   id: string

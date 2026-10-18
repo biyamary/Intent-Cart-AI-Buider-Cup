@@ -107,5 +107,45 @@
     "role": "Flavouring oil stabilizer",
     "explanation": "Historically used to keep citrus flavouring dispersed in beverages.",
     "source_url": "https://www.fda.gov/food/food-additives-petitions/brominated-vegetable-oil-bvo"
+  },
+  {
+    "canonical": "monosodium glutamate",
+    "additive_id": "E621",
+    "aliases": ["monosodium glutamate", "monosodium L-glutamate", "MSG", "E621", "INS621"],
+    "role": "Flavour enhancer",
+    "explanation": "Enhances savoury flavours already present. The FDA treats added MSG as generally recognized as safe and requires it to be named on the label.",
+    "source_url": "https://www.fda.gov/food/food-additives-petitions/questions-and-answers-monosodium-glutamate-msg"
+  },
+  {
+    "canonical": "disodium guanylate",
+    "additive_id": "E627",
+    "aliases": ["disodium guanylate", "disodium 5'-guanylate", "E627", "INS627"],
+    "role": "Flavour enhancer",
+    "explanation": "Enhances savoury flavours already present, often alongside MSG. The US permits it at the level needed for the intended effect.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-172.530"
+  },
+  {
+    "canonical": "disodium inosinate",
+    "additive_id": "E631",
+    "aliases": ["disodium inosinate", "disodium 5'-inosinate", "E631", "INS631"],
+    "role": "Flavour enhancer",
+    "explanation": "Enhances savoury flavours already present, often alongside MSG and disodium guanylate.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-172.535"
+  },
+  {
+    "canonical": "silicon dioxide",
+    "additive_id": "E551",
+    "aliases": ["silicon dioxide", "E551", "INS551"],
+    "role": "Anticaking agent",
+    "explanation": "Keeps powders such as seasonings free-flowing by preventing clumping.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-172.480"
+  },
+  {
+    "canonical": "tertiary butylhydroquinone",
+    "additive_id": "E319",
+    "aliases": ["tertiary butylhydroquinone", "tert-butylhydroquinone", "TBHQ", "E319", "INS319"],
+    "role": "Antioxidant (synthetic preservative)",
+    "explanation": "Slows fats and oils from going rancid. In the US, total antioxidants may not exceed 0.02% of the food's fat content.",
+    "source_url": "https://www.ecfr.gov/current/title-21/section-172.185"
   }
 ]

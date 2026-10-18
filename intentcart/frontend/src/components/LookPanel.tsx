@@ -4,20 +4,29 @@ import {
   BadgeCheck,
   Check,
   ExternalLink,
+  Heart,
   Link2,
   Loader2,
   MapPin,
   Plus,
   RefreshCw,
   Shirt,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Store,
   TrendingDown,
   X,
 } from 'lucide-react'
-import { api, post } from '../lib/api'
-import { money, type ChecklistItem, type Look, type Product, type SellerLabel } from '../lib/types'
+import { api } from '../lib/api'
+import {
+  money,
+  type ChecklistItem,
+  type FeedbackReason,
+  type Look,
+  type Product,
+  type SellerLabel,
+} from '../lib/types'
 import { safeWebUrl } from '../lib/conversations'
 import { ErrorMessage } from './Feedback'
 import { AuthedImage, PinterestPin, RemoteImage } from './BoardMedia'
@@ -37,11 +46,34 @@ const statusText = {
 }
 
 function isSearching(look?: Look) {
-  return Boolean(look?.items.some((item) => item.discovery === 'searching'))
+  return Boolean(
+    look?.items.some((item) => item.discovery === 'searching') ||
+    look?.budget_plan?.status === 'surveying',
+  )
 }
 
-export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: string }) {
+type LookMutation = {
+  url: string
+  body?: unknown
+  method?: 'POST' | 'PATCH'
+}
+
+type RefineKind =
+  'cheaper' | 'more_formal' | 'more_casual' | 'change_colour' | 'popular_stores_only' | 'custom'
+
+export function LookPanel({
+  lookId,
+  sessionId,
+  onRefine,
+}: {
+  lookId: string
+  sessionId: string
+  /** Draft a chat message for the user, or send it straight away. */
+  onRefine: (prompt: string, sendNow?: boolean) => void
+}) {
   const cache = useQueryClient()
+  const [refineOpen, setRefineOpen] = useState(false)
+  const [refinement, setRefinement] = useState('')
   const path = `/clothes/looks/${lookId}`
   const look = useQuery({
     queryKey: ['look', lookId],
@@ -49,10 +81,20 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
     refetchInterval: (query) => (isSearching(query.state.data) ? 2500 : false),
   })
   const update = useMutation({
-    mutationFn: ({ url, body }: { url: string; body?: unknown }) => post<Look>(url, body),
-    onSuccess: (data) => cache.setQueryData(['look', lookId], data),
+    mutationFn: ({ url, body, method = 'POST' }: LookMutation) =>
+      api<Look>(url, {
+        method,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      cache.setQueryData(['look', lookId], data)
+      setRefinement('')
+    },
   })
-  const act = (url: string, body?: unknown) => update.mutate({ url: `${path}${url}`, body })
+  const act = (url: string, body?: unknown, method?: 'POST' | 'PATCH') =>
+    update.mutate({ url: `${path}${url}`, body, method })
+  const refine = (kind: RefineKind, request = '', colour = '') =>
+    act('/refine', { kind, request, colour, preserve_selected: true })
   const data = look.data
   if (look.isPending) return <aside className="panel look-panel">Loading your look board…</aside>
   if (!data)
@@ -62,7 +104,8 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
       </aside>
     )
   const busy = update.isPending
-  const spentShare = Math.min(100, (data.total_spent_minor / data.brief.total_budget_minor) * 100)
+  const budget = data.brief.total_budget_minor
+  const spentShare = budget ? Math.min(100, (data.total_spent_minor / budget) * 100) : 0
   const open = data.items.filter((item) => item.status === 'open')
   return (
     <aside className="look-panel stack" aria-label="Look board">
@@ -72,24 +115,48 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
             <span className="eyebrow">YOUR LOOK BOARD</span>
             <h2>{data.brief.occasion}</h2>
           </div>
-          {data.brief.small_business && data.brief.small_business !== 'off' && (
-            <span className="seller-badge independent">
-              <Store size={12} />
-              {data.brief.small_business === 'only'
-                ? 'Small businesses only'
-                : 'Favouring small businesses'}
-            </span>
-          )}
+          <div className="look-header-actions">
+            {(data.brief.retailer_policy ?? 'popular_first') === 'popular_first' ? (
+              <span className="seller-badge brand">
+                <Store size={12} /> Popular stores first
+              </span>
+            ) : (
+              <span className="seller-badge independent">
+                <Store size={12} />
+                {data.brief.retailer_policy === 'independent_only'
+                  ? 'Independent stores only'
+                  : data.brief.retailer_policy === 'balanced'
+                    ? 'Popular + independent'
+                    : 'Favouring independent stores'}
+              </span>
+            )}
+            <button
+              type="button"
+              className="small secondary"
+              aria-expanded={refineOpen}
+              onClick={() => setRefineOpen((current) => !current)}
+            >
+              <SlidersHorizontal size={13} /> Update look
+            </button>
+          </div>
         </div>
-        <div className="budget-number">{money(data.remaining_budget_minor)}</div>
-        <p>left of {money(data.brief.total_budget_minor)}</p>
-        <div className="budget-track">
-          <div style={{ width: `${spentShare}%` }} />
-        </div>
-        <div className="summary-row">
-          <span>Selected</span>
-          <strong>{money(data.total_spent_minor)}</strong>
-        </div>
+        {budget ? (
+          <>
+            <div className="budget-number">{money(data.remaining_budget_minor)}</div>
+            <p>left of {money(budget)}</p>
+            <div className="budget-track">
+              <div style={{ width: `${spentShare}%` }} />
+            </div>
+            <div className="summary-row">
+              <span>Selected</span>
+              <strong>{money(data.total_spent_minor)}</strong>
+            </div>
+          </>
+        ) : (
+          <p className="muted small-copy">
+            Exploring ideas. Tell Mira your total budget when you are ready to shop.
+          </p>
+        )}
         {data.analysis?.palette?.length ? (
           <div className="palette-row" aria-label="Palette">
             {data.analysis.palette.map((colour) => (
@@ -98,9 +165,117 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
           </div>
         ) : null}
       </section>
+      {data.budget_plan && budget && (
+        <BudgetPlanCard
+          key={data.plan_revision ?? data.budget_plan.revision}
+          look={data}
+          busy={busy}
+          onReplan={() => act('/replan')}
+        />
+      )}
+      {refineOpen && (
+        <section className="panel refine-look-panel stack compact" aria-label="Update this look">
+          <div>
+            <span className="eyebrow">REFINE WITH MIRA</span>
+            <h3>What should change?</h3>
+            <p className="muted small-copy">
+              Selected pieces stay in place unless you ask to replace them.
+            </p>
+          </div>
+          <div className="refine-chips" aria-label="Quick refinements">
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('cheaper')}
+            >
+              Make the full look cheaper
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('popular_stores_only')}
+            >
+              Show popular stores first
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('change_colour')}
+            >
+              Change the colour palette
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('more_formal')}
+            >
+              Make the look more formal
+            </button>
+          </div>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!refinement.trim()) return
+              refine('custom', refinement.trim())
+            }}
+          >
+            <label className="sr-only" htmlFor={`refine-${lookId}`}>
+              Describe the change
+            </label>
+            <input
+              id={`refine-${lookId}`}
+              value={refinement}
+              maxLength={500}
+              onChange={(event) => setRefinement(event.target.value)}
+              placeholder="e.g. keep the shirt, find smarter trousers"
+            />
+            <button disabled={busy || !refinement.trim()}>Update look</button>
+          </form>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => onRefine('Help me decide what to change in this look.')}
+          >
+            Not sure? Discuss it with Mira
+          </button>
+        </section>
+      )}
       <ErrorMessage error={update.error} />
-      <Inspiration look={data} sessionId={sessionId} />
-      {data.status === 'awaiting_checklist' ? (
+      <Inspiration
+        look={data}
+        sessionId={sessionId}
+        onUse={(number, title) =>
+          onRefine(
+            `Let's go with idea ${number}${title ? ` (${title})` : ''} as my reference look.`,
+            true,
+          )
+        }
+      />
+      {data.status === 'exploring' ? (
+        !data.inspiration?.length && (
+          <section className="panel stack compact">
+            <span className="eyebrow">
+              <Sparkles size={12} /> GETTING TO KNOW YOUR STYLE
+            </span>
+            <p className="muted small-copy">
+              Answer a few quick questions in the chat, or ask Mira for look ideas from Pinterest
+              and fashion sites.
+            </p>
+            <button
+              type="button"
+              className="small secondary"
+              onClick={() => onRefine('Show me some look ideas first.', true)}
+            >
+              <Sparkles size={13} /> Show me look ideas
+            </button>
+          </section>
+        )
+      ) : data.status === 'awaiting_checklist' ? (
         <ChecklistEditor look={data} busy={busy} act={act} />
       ) : (
         <>
@@ -113,7 +288,7 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
               <Check size={16} /> Finish my look
             </button>
           )}
-          {data.status === 'assembled' && <Review look={data} />}
+          {data.status === 'assembled' && <Review look={data} onRefine={onRefine} />}
         </>
       )}
       <p className="fine-print">
@@ -125,16 +300,125 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
   )
 }
 
-function Inspiration({ look, sessionId }: { look: Look; sessionId: string }) {
+function BudgetPlanCard({
+  look,
+  busy,
+  onReplan,
+}: {
+  look: Look
+  busy: boolean
+  onReplan: () => void
+}) {
+  const plan = look.budget_plan!
+  const activeItems = look.items.filter(
+    (item) => item.status === 'open' || item.status === 'locked',
+  )
+  const loading = plan.status === 'surveying'
+  const budget = look.brief.total_budget_minor ?? 0
+  const shortfall = Math.max(0, plan.minimum_complete_total_minor - budget)
+
+  return (
+    <section className={`panel budget-plan budget-plan-${plan.status}`} aria-live="polite">
+      <div className="budget-plan-heading">
+        <div>
+          <span className="eyebrow">SMART BUDGET · PLAN {plan.revision}</span>
+          <h3>{loading ? 'Checking realistic prices' : 'How your budget is split'}</h3>
+        </div>
+        {look.status !== 'awaiting_checklist' && (
+          <button
+            type="button"
+            className="small secondary"
+            disabled={busy || loading}
+            onClick={onReplan}
+          >
+            {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+            Recheck
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="budget-survey-progress" role="status">
+          <span className="budget-survey-pulse" aria-hidden="true" />
+          <p>
+            Mira is surveying prices for each piece before finalising the split and results. This
+            keeps the complete look inside your total budget.
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className={`budget-plan-note ${plan.feasible === false ? 'warning' : ''}`}>
+            {plan.note ||
+              (plan.feasible
+                ? `Planned total ${money(plan.planned_total_minor)} within your ${money(budget)} budget.`
+                : `A complete look may need about ${money(plan.minimum_complete_total_minor)}.`)}
+          </p>
+          {plan.feasible === false && shortfall > 0 && (
+            <p className="budget-shortfall">
+              Short by about <strong>{money(shortfall)}</strong>. Remove a piece, use something you
+              own, or ask Mira for a cheaper version.
+            </p>
+          )}
+          <div className="budget-split" role="list" aria-label="Budget by item">
+            {activeItems.map((item) => (
+              <div className="budget-split-row" role="listitem" key={item.id}>
+                <div>
+                  <strong className="capitalize">{item.category}</strong>
+                  {item.price_band && (
+                    <span>
+                      Typical range {money(item.price_band.low_minor)}–
+                      {money(item.price_band.high_minor)}
+                      {item.price_band.source === 'market' && item.price_band.sample_count
+                        ? ` · ${item.price_band.sample_count} checked`
+                        : item.price_band.source === 'selected'
+                          ? ' · selected price'
+                          : ' · estimated'}
+                    </span>
+                  )}
+                </div>
+                <strong>{money(item.planned_budget_minor ?? item.budget_cap_minor)}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="budget-plan-totals">
+            <span>
+              {plan.open_item_count
+                ? `${plan.verified_item_count} of ${plan.open_item_count} item ranges use live prices`
+                : 'All pieces are resolved'}
+            </span>
+            <strong>{money(plan.planned_total_minor)} planned</strong>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function Inspiration({
+  look,
+  sessionId,
+  onUse,
+}: {
+  look: Look
+  sessionId: string
+  onUse: (number: number, title: string) => void
+}) {
   const concepts = look.concepts ?? []
-  const pins = (look.inspiration ?? []).filter((i) => i.kind === 'pinterest')
-  const pages = (look.inspiration ?? []).filter((i) => i.kind === 'web' && i.image_url)
-  if (!concepts.length && !pins.length && !pages.length) return null
+  // Numbered in board order so "idea 2" means the same thing to the user and to Mira.
+  const ideas = (look.inspiration ?? [])
+    .map((idea, index) => ({ idea, number: index + 1 }))
+    .filter(({ idea }) => idea.kind === 'pinterest' || idea.image_url)
+  if (!concepts.length && !ideas.length) return null
   return (
     <section className="panel inspiration-panel">
       <span className="eyebrow">
         <Sparkles size={12} /> INSPIRATION
       </span>
+      {ideas.length > 0 && look.status === 'exploring' && (
+        <p className="muted small-copy">
+          Pick the ideas you like and Mira will build a shoppable look from them.
+        </p>
+      )}
       <div className="inspiration-strip">
         {concepts
           .slice()
@@ -150,22 +434,29 @@ function Inspiration({ look, sessionId }: { look: Look; sessionId: string }) {
               </figcaption>
             </figure>
           ))}
-        {pages.map((page) => (
-          <a
-            key={page.id}
-            className="concept-card"
-            href={safeWebUrl(page.url)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <RemoteImage src={page.image_url!} alt={page.title} />
-            <span className="figcaption">
-              {page.title} · {page.source} ↗
+        {ideas.map(({ idea, number }) => (
+          <figure key={idea.id} className="concept-card idea-card">
+            <span className="idea-number" aria-label={`Idea ${number}`}>
+              {number}
             </span>
-          </a>
-        ))}
-        {pins.map((pin) => (
-          <PinterestPin key={pin.id} url={pin.url} title={pin.title} />
+            {idea.image_url ? (
+              <RemoteImage src={idea.image_url} alt={idea.title || `Idea ${number}`} />
+            ) : (
+              <PinterestPin url={idea.url} title={idea.title} />
+            )}
+            <figcaption>
+              <a href={safeWebUrl(idea.url)} target="_blank" rel="noopener noreferrer">
+                {idea.title || 'Look idea'} · {idea.source || 'Web'} ↗
+              </a>
+              <button
+                type="button"
+                className="small secondary"
+                onClick={() => onUse(number, idea.title)}
+              >
+                <Check size={13} /> Use this look
+              </button>
+            </figcaption>
+          </figure>
         ))}
       </div>
     </section>
@@ -298,6 +589,9 @@ function ItemCard({
   const [linkOpen, setLinkOpen] = useState(false)
   const itemPath = `/items/${item.id}`
   const searching = item.discovery === 'searching'
+  const feedback = item.feedback ?? []
+  const feedbackCount = feedback.length
+  const liked = new Set(feedback.filter((f) => f.sentiment === 'like').map((f) => f.product_id))
   return (
     <section className={`panel item-card status-${item.status}`}>
       <header className="item-card-header">
@@ -355,11 +649,25 @@ function ItemCard({
                   key={product.id}
                   product={product}
                   disabled={busy}
+                  liked={liked.has(product.id)}
                   onChoose={() => act(itemPath, { action: 'lock', product_id: product.id })}
-                  onReject={() => act(itemPath, { action: 'reject', product_id: product.id })}
+                  onFeedback={(sentiment, reasons) =>
+                    act(`${itemPath}/feedback`, { product_id: product.id, sentiment, reasons })
+                  }
                 />
               ))}
             </div>
+          )}
+          {feedbackCount > 0 && !searching && (
+            <button
+              className="small"
+              disabled={busy}
+              onClick={() =>
+                act(`${itemPath}/alternatives`, { request: 'more like the ones I liked' })
+              }
+            >
+              <Sparkles size={13} /> Find more using your feedback ({feedbackCount})
+            </button>
           )}
           {item.boutiques && item.boutiques.length > 0 && (
             <div className="boutiques">
@@ -470,19 +778,31 @@ function LinkForm({
   )
 }
 
+const dislikeReasons: { id: FeedbackReason; label: string }[] = [
+  { id: 'too_expensive', label: 'Too expensive' },
+  { id: 'wrong_colour', label: 'Wrong colour' },
+  { id: 'too_heavy', label: 'Too heavy / flashy' },
+  { id: 'too_plain', label: 'Too plain' },
+  { id: 'not_my_style', label: 'Not my style' },
+  { id: 'wrong_item', label: 'Wrong item' },
+]
+
 export function LiveProductCard({
   product,
   onChoose,
-  onReject,
+  onFeedback,
+  liked,
   disabled,
   compact,
 }: {
   product: Product
   onChoose?: () => void
-  onReject?: () => void
+  onFeedback?: (sentiment: 'like' | 'dislike', reasons: FeedbackReason[]) => void
+  liked?: boolean
   disabled?: boolean
   compact?: boolean
 }) {
+  const [asking, setAsking] = useState(false)
   const label = product.seller_label ?? 'unknown'
   const url = safeWebUrl(product.url ?? undefined)
   return (
@@ -495,22 +815,72 @@ export function LiveProductCard({
             <Shirt size={28} strokeWidth={1.3} />
           </span>
         )}
-        {onReject && (
-          <button
-            className="reject-button"
-            aria-label={`Hide ${product.title}`}
-            title="Not for me"
-            disabled={disabled}
-            onClick={onReject}
-          >
-            <X size={14} />
-          </button>
+        {onFeedback && (
+          <div className="card-reactions">
+            <button
+              className={`reaction-button ${liked ? 'active' : ''}`}
+              aria-label={`Like ${product.title}`}
+              aria-pressed={liked}
+              title="More like this"
+              disabled={disabled || liked}
+              onClick={() => onFeedback('like', [])}
+            >
+              <Heart size={14} fill={liked ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              className="reaction-button"
+              aria-label={`Not for me: ${product.title}`}
+              aria-expanded={asking}
+              title="Not for me"
+              disabled={disabled}
+              onClick={() => setAsking((open) => !open)}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        {asking && onFeedback && (
+          <div className="dislike-reasons" role="group" aria-label="Why not?">
+            <span>Why not?</span>
+            {dislikeReasons.map((reason) => (
+              <button
+                key={reason.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setAsking(false)
+                  onFeedback('dislike', [reason.id])
+                }}
+              >
+                {reason.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="quiet"
+              disabled={disabled}
+              onClick={() => {
+                setAsking(false)
+                onFeedback('dislike', [])
+              }}
+            >
+              Just hide it
+            </button>
+          </div>
         )}
       </div>
       <div className="product-info">
         <span className="eyebrow">{product.retailer}</span>
         <h4>{product.title}</h4>
         <strong>{money(product.price_minor)}</strong>
+        {product.stretch && (
+          <span
+            className="stretch-badge"
+            title="A strong match priced above this piece's share of your budget; it still fits your total."
+          >
+            Above this piece's budget
+          </span>
+        )}
         {sellerText[label] && (
           <span className={`seller-badge ${label}`} title={product.seller_note || undefined}>
             {label === 'verified_small_business' ? <BadgeCheck size={12} /> : <Store size={12} />}
@@ -549,7 +919,7 @@ export function LiveProductCard({
   )
 }
 
-function Review({ look }: { look: Look }) {
+function Review({ look, onRefine }: { look: Look; onRefine: (prompt: string) => void }) {
   const chosen = look.items.filter((item) => item.status === 'locked' && item.chosen_product)
   return (
     <section className="panel review-panel stack compact">
@@ -590,7 +960,14 @@ function Review({ look }: { look: Look }) {
         <span>Remaining budget</span>
         <strong>{money(look.remaining_budget_minor)}</strong>
       </div>
-      <p className="fine-print">Swap any single piece above without rebuilding the look.</p>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => onRefine('I want to update this look while keeping the pieces I selected.')}
+      >
+        <SlidersHorizontal size={14} /> Update this look
+      </button>
+      <p className="fine-print">Refine the full look or swap one piece without starting over.</p>
     </section>
   )
 }

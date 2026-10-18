@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1050" role="img" aria-labelledby="title desc">
+  <title id="title">IntentCart named agents landing page, desktop concept</title>
+  <desc id="desc">Desktop landing page with equal chat actions for Nia the Food Guide and Mira the Personal Stylist, followed by two detailed specialist cards.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#183d34" flood-opacity=".09"/></filter>
+    <style>
+      .ui{font-family:Inter,Segoe UI,sans-serif}.serif{font-family:Georgia,serif}.ink{fill:#183d34}.muted{fill:#6b766f}.eyebrow{font:700 10px Inter,Segoe UI,sans-serif;letter-spacing:1.8px;fill:#5f7365}.label{font:600 13px Inter,Segoe UI,sans-serif}.small{font:500 11px Inter,Segoe UI,sans-serif}.body{font:400 14px Inter,Segoe UI,sans-serif}.line{stroke:#dfe4dc;stroke-width:1}.call{fill:#819e52}.call-text{font:700 11px Inter,Segoe UI,sans-serif;fill:#fff}
+    </style>
+  </defs>
+  <rect width="1440" height="1050" fill="#f7f7f2"/>
+  <rect width="1440" height="82" fill="#fff"/>
+  <line x1="0" y1="82" x2="1440" y2="82" class="line"/>
+  <rect x="124" y="23" width="36" height="38" rx="10" fill="#183d34"/>
+  <path d="M135 39h14l-1 12h-12zM138 39c0-5 8-5 8 0" fill="none" stroke="#e7edcf" stroke-width="2"/>
+  <text x="171" y="49" class="ui ink" font-size="24" font-weight="650">intentcart<tspan fill="#7f9c4d">.</tspan></text>
+  <text x="635" y="50" class="label muted">Food</text><text x="721" y="50" class="label muted">Clothes</text>
+  <circle cx="1274" cy="40" r="12" fill="none" stroke="#61756a"/><text x="1295" y="45" class="small muted">My profile</text>
+  <rect y="82" width="1440" height="32" fill="#ecf0e5"/><text x="720" y="102" text-anchor="middle" class="ui muted" font-size="10">CONVERSATIONAL AGENTS · LIVE SEARCH &amp; EVIDENCE</text>
+
+  <g transform="translate(124 165)">
+    <circle cx="4" cy="4" r="4" fill="#8da85d"/><text x="17" y="8" class="eyebrow">TWO SPECIALISTS. ONE EASIER CART.</text>
+    <text x="0" y="80" class="ui ink" font-size="66" font-weight="500" letter-spacing="-3.7">Ask. Decide.</text>
+    <text x="0" y="149" class="ui ink" font-size="66" font-weight="500" letter-spacing="-3.7">Shop with <tspan class="serif" fill="#6b8251" font-style="italic" font-weight="400">confidence.</tspan></text>
+    <text x="0" y="197" class="body muted">Start a conversation with the specialist you need. Nia makes food labels clearer.</text>
+    <text x="0" y="220" class="body muted">Mira builds a complete look around you and your budget.</text>
+
+    <rect x="0" y="252" width="236" height="64" rx="9" fill="#183d34"/>
+    <circle cx="27" cy="284" r="12" fill="none" stroke="#e9f0e6"/><path d="M20 284h14M27 277v14" stroke="#e9f0e6"/>
+    <text x="48" y="279" class="label" fill="#fff">Chat with Nia</text><text x="48" y="297" class="small" fill="#cddccf">Food Guide</text><text x="214" y="289" fill="#fff" font-size="20">→</text>
+    <rect x="248" y="252" width="236" height="64" rx="9" fill="#f3efe4" stroke="#d8d0bd"/>
+    <path d="M267 277l8-5 8 5v15h-16z" fill="none" stroke="#183d34"/><text x="296" y="279" class="label ink">Chat with Mira</text><text x="296" y="297" class="small muted">Personal Stylist</text><text x="462" y="289" class="ink" font-size="20">→</text>
+    <text x="0" y="344" class="small muted">◯  Just describe what you need — they’ll guide the next step.</text>
+  </g>
+
+  <g transform="translate(755 145)">
+    <circle cx="247" cy="186" r="180" fill="none" stroke="#dce2cf"/><circle cx="247" cy="186" r="140" fill="none" stroke="#dce2cf"/>
+    <g transform="rotate(-6 126 128)" filter="url(#shadow)">
+      <rect x="5" y="28" width="265" height="206" rx="15" fill="#fffdf6" stroke="#e6e5d7"/>
+      <circle cx="42" cy="66" r="19" fill="#183d34"/><text x="42" y="73" text-anchor="middle" class="serif" font-size="19" fill="#fff">N</text>
+      <text x="72" y="63" class="label ink">Nia</text><text x="72" y="79" class="small muted">Food Guide</text>
+      <text x="31" y="115" class="serif ink" font-size="16">“Let’s take a closer look at that label.”</text>
+      <rect x="31" y="137" width="203" height="6" rx="3" fill="#e7eadb"/><rect x="31" y="152" width="165" height="6" rx="3" fill="#e7eadb"/><rect x="31" y="167" width="116" height="6" rx="3" fill="#e7eadb"/>
+      <rect x="31" y="190" width="203" height="27" rx="6" fill="#eff3e4"/><text x="43" y="208" class="small" fill="#5c7550">✓ Your preferences, considered</text>
+    </g>
+    <g transform="rotate(7 358 230)" filter="url(#shadow)">
+      <rect x="242" y="121" width="262" height="212" rx="15" fill="#e7eddd" stroke="#d9e2cb"/>
+      <circle cx="281" cy="160" r="19" fill="#6f805a"/><text x="281" y="167" text-anchor="middle" class="serif" font-size="19" fill="#fff">M</text>
+      <text x="311" y="157" class="label ink">Mira</text><text x="311" y="173" class="small muted">Personal Stylist</text>
+      <path d="M336 203l18-11 18 11-9 17v35h-36v-35z" fill="none" stroke="#6f805a" stroke-width="2"/>
+      <text x="281" y="280" class="serif ink" font-size="15">“I’ll bring the whole look together.”</text>
+      <circle cx="313" cy="307" r="9" fill="#859b68"/><circle cx="338" cy="307" r="9" fill="#bca27d"/><circle cx="363" cy="307" r="9" fill="#ead8b8"/><circle cx="388" cy="307" r="9" fill="#4d6554"/>
+    </g>
+    <text x="444" y="42" class="small muted" transform="rotate(8 444 42)">Help that feels</text><text x="443" y="69" class="serif" fill="#61724e" font-size="27" font-style="italic" transform="rotate(8 443 69)">personal.</text>
+  </g>
+
+  <line x1="124" y1="565" x2="1316" y2="565" class="line"/>
+  <text x="124" y="604" class="eyebrow">WHO CAN HELP TODAY?</text><text x="124" y="640" class="ui ink" font-size="29" font-weight="500" letter-spacing="-1">Meet your shopping specialists.</text>
+  <text x="1316" y="632" text-anchor="end" class="small muted">Choose one and start with a simple message</text>
+
+  <g transform="translate(124 674)">
+    <rect width="576" height="312" rx="13" fill="#edf2e5" stroke="#dce3d2"/>
+    <text x="28" y="36" class="eyebrow">01 / FOOD</text><rect x="500" y="24" width="48" height="48" rx="12" fill="none" stroke="#cdd6c3"/><circle cx="524" cy="48" r="10" fill="none" stroke="#183d34"/>
+    <text x="28" y="90" class="serif ink" font-size="39">Nia</text><text x="111" y="88" class="label muted">|  Food Guide</text>
+    <text x="28" y="122" class="body muted">Decode a label, compare ingredients, and understand what works for you.</text>
+    <rect x="28" y="142" width="105" height="27" rx="14" fill="#fff" fill-opacity=".55" stroke="#d4dccd"/><text x="80" y="160" text-anchor="middle" class="small muted">✓ Read a label</text>
+    <rect x="142" y="142" width="135" height="27" rx="14" fill="#fff" fill-opacity=".55" stroke="#d4dccd"/><text x="209" y="160" text-anchor="middle" class="small muted">✓ Compare ingredients</text>
+    <rect x="28" y="187" width="520" height="54" rx="8" fill="#fff" fill-opacity=".62" stroke="#d8ded1"/><text x="43" y="207" class="eyebrow">TRY ASKING</text><text x="43" y="228" class="serif ink" font-size="14">“Is this cereal a good everyday option for my family?”</text>
+    <line x1="28" y1="261" x2="548" y2="261" class="line"/><text x="28" y="291" class="label ink">Chat with Nia</text><text x="548" y="291" text-anchor="end" class="ink" font-size="21">→</text>
+  </g>
+  <g transform="translate(716 674)">
+    <rect width="600" height="312" rx="13" fill="#f1eee6" stroke="#e3dfd3"/>
+    <text x="28" y="36" class="eyebrow">02 / STYLE</text><rect x="524" y="24" width="48" height="48" rx="12" fill="none" stroke="#d5cebf"/><path d="M539 43l9-5 9 5-4 8v10h-10V51z" fill="none" stroke="#183d34"/>
+    <text x="28" y="90" class="serif ink" font-size="39">Mira</text><text x="118" y="88" class="label muted">|  Personal Stylist</text>
+    <text x="28" y="122" class="body muted">Plan a complete look for your occasion, preferences, and budget.</text>
+    <rect x="28" y="142" width="102" height="27" rx="14" fill="#fff" fill-opacity=".55" stroke="#d9d3c7"/><text x="79" y="160" text-anchor="middle" class="small muted">✓ Plan a look</text>
+    <rect x="139" y="142" width="115" height="27" rx="14" fill="#fff" fill-opacity=".55" stroke="#d9d3c7"/><text x="196" y="160" text-anchor="middle" class="small muted">✓ Set the budget</text>
+    <rect x="28" y="187" width="544" height="54" rx="8" fill="#fff" fill-opacity=".62" stroke="#ddd7cc"/><text x="43" y="207" class="eyebrow">TRY ASKING</text><text x="43" y="228" class="serif ink" font-size="14">“Build me a smart-casual dinner look under ₹4,000.”</text>
+    <line x1="28" y1="261" x2="572" y2="261" class="line"/><text x="28" y="291" class="label ink">Chat with Mira</text><text x="572" y="291" text-anchor="end" class="ink" font-size="21">→</text>
+  </g>
+</svg>

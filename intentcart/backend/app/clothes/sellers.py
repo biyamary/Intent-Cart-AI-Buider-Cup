@@ -9,6 +9,36 @@ from app.clothes.pages import host_of
 
 DATA = Path(__file__).parents[1] / "data"
 
+# Stable ordering used both in search prompts and deterministic shortlists.
+# A listing still needs a verified product-page price before it can be shown.
+POPULAR_RETAILERS = (
+    "myntra.com",
+    "amazon.in",
+    "ajio.com",
+    "flipkart.com",
+    "nykaafashion.com",
+    "tatacliq.com",
+    "shopsy.in",
+    "meesho.com",
+)
+
+
+STORE_NAMES = {
+    "myntra.com": "Myntra",
+    "amazon.in": "Amazon.in",
+    "ajio.com": "AJIO",
+    "flipkart.com": "Flipkart",
+    "nykaafashion.com": "Nykaa Fashion",
+    "tatacliq.com": "Tata CLiQ",
+    "shopsy.in": "Shopsy",
+    "meesho.com": "Meesho",
+}
+
+
+def store_name(url: str) -> str | None:
+    """Display name of a popular store, e.g. "Myntra" for a myntra.com page."""
+    return STORE_NAMES.get(_matches(host_of(url), STORE_NAMES) or "")
+
 
 @dataclass(frozen=True)
 class Registry:
@@ -66,4 +96,28 @@ def small_business_domains() -> list[str]:
 
 
 def is_small_business(label: str) -> bool:
-    return label in {"verified_small_business", "independent"}
+    # An unknown own-domain store is independent, but it is not a verified
+    # small business. Only reviewed registry entries receive that treatment.
+    return label == "verified_small_business"
+
+
+def popular_retailer_domains() -> list[str]:
+    return list(POPULAR_RETAILERS)
+
+
+def retailer_priority(url: str | None, label: str, preferred: list[str] | None = None) -> int:
+    host = host_of(url or "")
+    for name in preferred or []:
+        token = name.lower().replace("https://", "").replace("www.", "").split("/")[0]
+        if token and (token in host or host.split(".")[0] in token):
+            return -10
+    for index, domain in enumerate(POPULAR_RETAILERS):
+        if host == domain or host.endswith("." + domain):
+            return index
+    return {
+        "marketplace": 20,
+        "brand": 30,
+        "verified_small_business": 40,
+        "independent": 50,
+        "unknown": 60,
+    }.get(label, 60)

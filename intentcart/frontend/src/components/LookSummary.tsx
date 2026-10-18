@@ -8,10 +8,12 @@ export function LookSummary({ look }: { look: Look }) {
       <span className="eyebrow">Your look, at a glance</span>
       <h2>{look.brief.occasion}</h2>
       <div className="budget-number">{money(look.remaining_budget_minor)}</div>
-      <p>left of your {money(look.brief.total_budget_minor)} budget</p>
+      <p>left of your {money(look.brief.total_budget_minor ?? 0)} budget</p>
       <div className="budget-track">
         <div
-          style={{ width: `${(look.total_spent_minor / look.brief.total_budget_minor) * 100}%` }}
+          style={{
+            width: `${(look.total_spent_minor / (look.brief.total_budget_minor || 1)) * 100}%`,
+          }}
         />
       </div>
       <div className="summary-row">

@@ -1,16 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { NavLink, Route, Routes, Link } from 'react-router-dom'
-import { ShoppingBag, ScanLine, Shirt, UserRound, ArrowUpRight } from 'lucide-react'
+import { NavLink, Route, Routes, Link, useNavigate } from 'react-router-dom'
+import { ShoppingBag, ScanLine, Shirt, UserRound, LogIn, LogOut } from 'lucide-react'
 import { onAuthStateChanged } from 'firebase/auth'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './lib/api'
-import { auth, signIn, logOut } from './lib/firebase'
-import { useLookStore } from './store/lookStore'
+import { api, onUnauthorized } from './lib/api'
+import { auth } from './lib/firebase'
+import { clearUserData, sessionKey, signOut, switchUser, useSession } from './lib/session'
 import { Home } from './pages/Home'
 import { FoodCheck } from './pages/FoodCheck'
 import { LookBoard } from './pages/LookBoard'
+import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
 import { ErrorMessage } from './components/Feedback'
+import { RequireAuth } from './components/RequireAuth'
 
 const ShopLook = lazy(() =>
   import('./pages/ShopLook').then((module) => ({ default: module.ShopLook })),
@@ -18,8 +20,9 @@ const ShopLook = lazy(() =>
 
 export default function App() {
   const cache = useQueryClient()
-  const [uid, setUid] = useState<string | null>(auth ? null : 'demo')
-  const [ready, setReady] = useState(!auth)
+  const navigate = useNavigate()
+  const session = useSession()
+  const user = session.data
   const [authError, setAuthError] = useState<unknown>()
   const health = useQuery({
     queryKey: ['health'],
@@ -28,14 +31,26 @@ export default function App() {
     retry: 1,
   })
   useEffect(() => {
+    // An expired or revoked session anywhere sends protected pages back to sign-in.
+    onUnauthorized(() => {
+      if (cache.getQueryData(sessionKey)) switchUser(cache, null)
+    })
     if (!auth) return
-    return onAuthStateChanged(auth, (user) => {
-      cache.clear()
-      useLookStore.getState().setLook(null)
-      setUid(user?.uid ?? null)
-      setReady(true)
+    return onAuthStateChanged(auth, () => {
+      clearUserData(cache)
+      void cache.invalidateQueries({ queryKey: sessionKey })
     })
   }, [cache])
+  // Only surface the mode bar when something needs the user's attention.
+  const liveAgents =
+    health.data?.food_agent_mode === 'gemini' || health.data?.stylist_agent_mode === 'gemini'
+  const modeNotice = health.isError
+    ? 'API unavailable · Start the backend on port 8000'
+    : !health.data || liveAgents
+      ? null
+      : health.data.agent_mode === 'demo'
+        ? 'Local demo · Sample data and placeholder AI responses'
+        : 'Gemini mode · Prompts and integrations require configuration'
   return (
     <>
       <header className="site-header">
@@ -56,75 +71,84 @@ export default function App() {
               Clothes
             </NavLink>
           </nav>
-          <NavLink className="profile-link" to="/profile">
-            <UserRound size={18} />
-            <span>My profile</span>
-          </NavLink>
+          <div className="account">
+            <NavLink className="profile-link" to="/profile">
+              <UserRound size={18} />
+              <span>{user && user.auth_mode !== 'demo' ? user.name : 'My profile'}</span>
+            </NavLink>
+            {user && user.auth_mode !== 'demo' ? (
+              <button
+                className="text-button account-action"
+                onClick={() => {
+                  setAuthError(null)
+                  signOut(cache)
+                    .then(() => navigate('/'))
+                    .catch(setAuthError)
+                }}
+              >
+                <LogOut size={15} /> Sign out
+              </button>
+            ) : (
+              !user &&
+              !session.isPending && (
+                <Link className="account-action" to="/login">
+                  <LogIn size={15} /> Sign in
+                </Link>
+              )
+            )}
+          </div>
         </div>
       </header>
-      <div className="app-mode">
-        {health.isError
-          ? 'API unavailable · Start the backend on port 8000'
-          : health.data
-            ? health.data.food_agent_mode === 'gemini' || health.data.stylist_agent_mode === 'gemini'
-              ? 'Conversational Agents · Gemini with Search & Evidence'
-              : health.data.agent_mode === 'demo'
-                ? 'Local demo · Sample data and placeholder AI responses'
-                : 'Gemini mode · Prompts and integrations require configuration'
-            : 'Connecting to your companion…'}
-        {auth && (
-          <button
-            className="text-button"
-            onClick={() => {
-              setAuthError(null)
-              void (uid ? logOut() : signIn()).catch(setAuthError)
-            }}
-          >
-            {uid ? 'Sign out' : 'Sign in with Google'}
-          </button>
-        )}
-      </div>
+      {modeNotice && <div className="app-mode">{modeNotice}</div>}
       <main className="main">
         <ErrorMessage error={authError} />
-        {!ready ? (
-          <p>Checking sign-in…</p>
-        ) : !uid ? (
-          <div className="panel stack">
-            <h1>Welcome to IntentCart.</h1>
-            <p>Sign in to save your preferences, food reviews, and looks.</p>
-            <button
-              onClick={() => {
-                void signIn().catch(setAuthError)
-              }}
-            >
-              Continue with Google <ArrowUpRight size={18} />
-            </button>
-          </div>
-        ) : (
-          <Routes key={uid}>
-            <Route path="/" element={<Home />} />
-            <Route path="/food" element={<FoodCheck />} />
-            <Route
-              path="/clothes"
-              element={
+        <Routes key={user?.id ?? 'signed-out'}>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/food"
+            element={
+              <RequireAuth>
+                <FoodCheck />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/clothes"
+            element={
+              <RequireAuth>
                 <Suspense fallback={<p>Loading your stylist…</p>}>
                   <ShopLook />
                 </Suspense>
-              }
-            />
-            <Route path="/clothes/board" element={<LookBoard />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route
-              path="*"
-              element={
-                <div className="panel">
-                  <h1>Page not found.</h1>
-                  <Link to="/">Back to IntentCart</Link>
-                </div>
-              }
-            />
-          </Routes>
-        )}
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/clothes/board"
+            element={
+              <RequireAuth>
+                <LookBoard />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <RequireAuth>
+                <Profile />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="*"
+            element={
+              <div className="panel">
+                <h1>Page not found.</h1>
+                <Link to="/">Back to IntentCart</Link>
+              </div>
+            }
+          />
+        </Routes>
       </main>
       <footer>
         <Link className="brand footer-brand" to="/">

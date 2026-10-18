@@ -6,8 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 from google.adk.tools import AgentTool, FunctionTool, google_search
+from google.genai import types
 
-from app.agents.food_agent import create_research_agent
+from app.agents.base import TimedAgentTool
+from app.agents.food_agent import (
+    create_food_chat_agent,
+    create_research_agent,
+    lookup_ingredient_database,
+)
 from app.agents.food_pipeline import FoodPipeline, prioritized_gaps
 from app.agents.schemas import Explanation, ResearchFinding, ResearchResults
 from app.config import Settings
@@ -241,6 +247,45 @@ def test_search_is_isolated_in_agent_tool():
     assert search.agent.tools == [google_search]
     assert any(isinstance(t, FunctionTool) for t in agent.tools)
     assert google_search not in agent.tools
+
+
+def test_chat_search_is_quick_and_bounded_while_pipeline_search_keeps_its_prompt():
+    chat = create_food_chat_agent(settings(food_search_timeout_seconds=25))
+    search = next(t for t in chat.tools if isinstance(t, TimedAgentTool))
+    assert search.timeout == 25
+    assert search.agent.tools == [google_search]
+    assert "Answer one specific food question" in search.agent.instruction
+    config = search.agent.generate_content_config
+    assert config.max_output_tokens == 1024
+    assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
+
+    pipeline = create_research_agent(settings())
+    pipeline_search = next(t for t in pipeline.tools if isinstance(t, AgentTool))
+    assert not isinstance(pipeline_search, TimedAgentTool)
+    assert "discover official evidence" in pipeline_search.agent.instruction
+
+
+def test_common_snack_additives_resolve_locally_without_search():
+    for query, canonical in [
+        ("TBHQ", "tertiary butylhydroquinone"),
+        ("Tertiary butylhydroquinone", "tertiary butylhydroquinone"),
+        ("INS 627", "disodium guanylate"),
+        ("E631", "disodium inosinate"),
+        ("INS551", "silicon dioxide"),
+        ("MSG", "monosodium glutamate"),
+    ]:
+        found = lookup_ingredient_database(query)
+        assert found["found"] and found["canonical"] == canonical, query
+        assert found["source_url"].startswith("https://www.")
+
+    label = normalize_ingredients(
+        ["Potato", "Flavour enhancers (INS 627, INS 631)", "Anticaking agent (INS 551)"]
+    )
+    assert {i.canonical: i.additive_id for i in label if i.additive_id} == {
+        "disodium guanylate": "E627",
+        "disodium inosinate": "E631",
+        "silicon dioxide": "E551",
+    }
 
 
 def test_cache_verified_only_and_expiry():

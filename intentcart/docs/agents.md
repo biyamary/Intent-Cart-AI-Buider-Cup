@@ -20,6 +20,8 @@ instead of the API key below. The agent mode and search settings apply to both p
 AGENT_MODE=demo
 STYLIST_AGENT_MODE=gemini
 STYLIST_SEARCH_ENABLED=false
+FOOD_AGENT_MODE=gemini
+FOOD_TIMEOUT_SECONDS=120
 GOOGLE_API_KEY=your-server-side-key
 GEMINI_MODEL=gemini-flash-latest
 AGENT_SESSION_BACKEND=sqlite
@@ -108,24 +110,48 @@ constraints and grounding propagation in mind when adding tools.
 - Authenticated users cannot read or send to another user's session. Demo auth
   still uses one shared local identity and must not be exposed as private service.
 - A whole turn is protected against overlapping requests within one process.
-  `request_id` is a client UUID: replaying a recorded request returns saved history
-  without another Gemini call, including previously failed requests.
-- Timeouts and provider failures preserve history and add a public error message.
-  Send a new follow-up to retry a failed turn. The server never returns raw SDK
-  errors, secrets or internal thoughts. It has a 40-turn conversation limit, six
-  model calls per turn and a configurable timeout.
+  `request_id` is a client UUID and idempotency key. Replaying an accepted,
+  running or terminal request returns saved state without another Gemini call.
+  A retry or follow-up uses a new UUID.
+- New clients should use the accepted-turn API below. It persists
+  `queued -> running -> succeeded/failed`, with a safe progress vocabulary:
+  `queued`, `understanding`, `planning`, `searching`, `researching`, `preparing`,
+  `complete` and `failed`. These are application-owned labels, never model
+  thoughts, prompts, tool arguments or raw tool results.
+- Timeouts and provider failures preserve history and append exactly one canonical
+  public error message. Terminal turn state and that message carry the same error
+  code and retry advice. Food has `FOOD_TIMEOUT_SECONDS=120` by default; Shop a
+  Look has `STYLIST_TIMEOUT_SECONDS=120`. Errors name the relevant assistant
+  instead of always referring to a stylist.
+- Each turn has a model-call budget (`FOOD_MAX_LLM_CALLS=10`,
+  `STYLIST_MAX_LLM_CALLS=12`) and a research window: the turn timeout minus a
+  reserve for one more tool call and the answer (food: 20s more than
+  `FOOD_SEARCH_TIMEOUT_SECONDS`; others: 30s; never less than half the turn). Once either runs out, the
+  next model call runs with function calling disabled, so the turn ends with an
+  answer built from the evidence it gathered rather than an error.
+- Nia's chat search is a separate, quick agent (`food_chat_search.md`: one focused
+  search, a short sourced answer, low thinking) and each call is cut off after
+  `FOOD_SEARCH_TIMEOUT_SECONDS=30`. The scanner pipeline keeps its slower
+  evidence search. Nia matches research depth to the question: a product's
+  ingredients come first, and the full safety and regulatory review is offered as
+  a follow-up unless asked for or flagged by the user's profile.
+- The blocking compatibility route retains its historical HTTP error response.
+  Its clients must render either that response or the refreshed transcript, not
+  both. The server never returns raw SDK errors, secrets or internal thoughts.
 - Raw tool payloads and thought parts are excluded from the public transcript.
   Google Search's source URLs, support mappings and HTML/CSS search entry point
   are preserved. Markdown cannot execute raw HTML; the provider's search snippet
   is rendered in a sandboxed iframe with scripts and parent-origin access blocked.
-- This initial implementation uses one API worker. SQLite is local storage, not
-  durable Cloud Run storage. Before multi-instance deployment, provide a shared
-  ADK session service (e.g. PostgreSQL/managed sessions), a distributed whole-turn
-  lease, retention controls and session pagination. Database event locks alone do
-  not serialize an entire model invocation.
-- No SSE/token streaming yet. The UI shows a pending reply and then the final
-  answer. Built-in Google Search does not necessarily emit ordinary function-call
-  events, so the UI does not fabricate search progress.
+- This implementation uses one API worker. Accepted turns run as in-process tasks;
+  SQLite preserves lifecycle events, not the running coroutine. After a process
+  restart, polling a formerly queued/running turn records one `interrupted` failure
+  so the UI does not spin forever and the user can follow up. Graceful shutdown
+  also records interruption for active accepted turns. Before multi-instance
+  deployment, add a durable queue, shared session service and distributed
+  per-session lease. Database event locks alone do not serialize a model call.
+- There is no token/SSE streaming. Polling is the supported fallback and progress
+  advances only at safe application/agent event boundaries. Built-in Google Search
+  may not emit a distinct tool event, so the server does not invent granular steps.
 
 ## Endpoints
 
@@ -137,7 +163,42 @@ All routes below require the current user identity and start with `/api`:
 | POST | `/agents/stylist/sessions` | New empty conversation |
 | GET | `/agents/stylist/sessions` | Current user's recent conversations |
 | GET | `/agents/stylist/sessions/{id}` | Public conversation history |
-| POST | `/agents/stylist/sessions/{id}/messages` | Send `{ "text": "...", "request_id": "UUID" }`; return updated history |
+| POST | `/agents/{agent}/sessions/{id}/turns` | Preferred: accept `{ "text": "...", "request_id": "UUID", "attachments": [] }`; return `202` plus `TurnStatus` immediately |
+| GET | `/agents/{agent}/sessions/{id}/turns/{request_id}` | Poll authenticated, user-scoped status for that idempotency key |
+| POST | `/agents/{agent}/sessions/{id}/messages` | Compatibility: block until completion and return updated history; failures retain their HTTP status |
+
+`TurnStatus` has this stable shape (timestamps are Unix seconds):
+
+```json
+{
+  "request_id": "82ee1fb7-828c-4e85-bef0-795c59db3d80",
+  "agent_id": "food",
+  "session_id": "...",
+  "status": "running",
+  "progress": {"stage": "researching", "label": "Checking trusted food sources"},
+  "created_at": 1792310400.0,
+  "updated_at": 1792310401.2,
+  "error": null,
+  "retry": null
+}
+```
+
+On failure, `error` is `{ "code": "timeout", "message": "..." }` and
+`retry` is `{ "allowed": true, "after_seconds": null,
+"use_new_request_id": true }`. Quota delays populate `after_seconds`; permanent
+configuration or zero-quota failures set `allowed` to `false`.
+
+Frontend integration:
+
+1. Generate one UUID and `POST .../turns` once. Keep the draft until the `202`.
+2. Show `progress.label` and poll `GET .../turns/{request_id}` about once per second.
+   Reuse the UUID when retrying an uncertain network request; it cannot duplicate
+   the Gemini call.
+3. At `succeeded` or `failed`, stop polling and fetch the conversation once. Render
+   its assistant/error message as the canonical bubble. Do not create another
+   error bubble from the status response.
+4. If `retry.allowed`, Retry/Continue sends a new turn with a new UUID, observing
+   `after_seconds` when supplied.
 
 ## Verification
 

@@ -54,4 +54,4 @@ class CandidateScore(BaseModel):
 
 
 class RankResult(BaseModel):
-    scores: list[CandidateScore] = Field(default_factory=list, max_length=20)
+    scores: list[CandidateScore] = Field(default_factory=list, max_length=40)

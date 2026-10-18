@@ -259,7 +259,7 @@ export function LookBoard() {
                   {[...history.data].reverse().map((item) => (
                     <button className="history-item" key={item.id} onClick={() => setLook(item)}>
                       <strong>{item.brief.occasion}</strong>
-                      <span>{money(item.brief.total_budget_minor)} · Open look ↗</span>
+                      <span>{money(item.brief.total_budget_minor ?? 0)} · Open look ↗</span>
                     </button>
                   ))}
                 </div>

@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 from google.adk.tools import google_search
 from google.adk.tools.google_maps_grounding_tool import google_maps_grounding
@@ -19,11 +20,22 @@ from google.genai import types
 from app.agents.base import AgentDefinition, create_agent
 from app.agents.google_client import create_genai_client
 from app.agents.schemas import Explanation
-from app.clothes.agent_calls import parse_json, run_once
-from app.clothes.pages import Fetcher, fetch_public, host_of, normalise_url, parse_product_page
+from app.clothes.agent_calls import markdown_links, parse_json, run_once
+from app.clothes.pages import (
+    GROUNDING_REDIRECT_HOSTS,
+    Fetcher,
+    fetch_public,
+    host_of,
+    normalise_url,
+    parse_product_page,
+)
 from app.config import Settings
 from app.schemas import Boutique, InspirationItem, Look, LookAnalysis
 
+MAX_PINS = 8
+MAX_PAGES = 8
+# Video and social pages have no usable look preview.
+NO_PREVIEW_HOSTS = {"youtube.com", "m.youtube.com", "instagram.com", "facebook.com"}
 PIN_RE = re.compile(r"^https://(?:[a-z]{2,3}\.)?pinterest\.[a-z.]{2,6}/pin/([\w-]{3,40})/?", re.IGNORECASE)
 
 
@@ -66,8 +78,14 @@ class Studio:
             "occasion": look.brief.occasion if look else "",
             "description": look.brief.description if look else "",
         }
-        parts = [types.Part.from_text(text=json.dumps(payload))]
-        parts += [types.Part.from_bytes(data=data, mime_type=mime) for data, mime in images]
+        # High media resolution: embroidery, mirror work and jewellery detail matter here.
+        detail = types.PartMediaResolution(level=types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH)
+        parts = [
+            types.Part(inline_data=types.Blob(data=data, mime_type=mime), media_resolution=detail)
+            for data, mime in images
+        ]
+        # Gemini 3 guidance: put the question after the media it refers to.
+        parts.append(types.Part.from_text(text=json.dumps(payload)))
         result = await run_once(agent, parts, timeout=60, max_llm_calls=2)
         data = parse_json(result.text)
         if not isinstance(data, dict):
@@ -82,43 +100,89 @@ class Studio:
         payload = {
             "occasion": look.brief.occasion,
             "description": look.brief.description,
+            "avoid_colours": look.brief.avoid_colours,
             "palette": look.analysis.palette if look.analysis else look.brief.colours,
             "style_tags": look.analysis.style_tags if look.analysis else [],
             "pieces": [i.target or i.category for i in look.items if i.status != "removed"],
             "request": request,
         }
         result = await run_once(agent, [types.Part.from_text(text=json.dumps(payload))], timeout=60)
-        data = parse_json(result.text) or {}
-        pins, pages = [], []
-        for entry in data.get("pins", []) if isinstance(data, dict) else []:
-            if isinstance(entry, dict) and (url := pin_url(entry.get("url", ""))):
-                pins.append((url, str(entry.get("title", ""))[:160]))
-        for entry in data.get("pages", []) if isinstance(data, dict) else []:
-            url = normalise_url(entry.get("url", "")) if isinstance(entry, dict) else None
-            if url and not pin_url(url):
-                pages.append((url, str(entry.get("title", ""))[:160]))
-        # Grounded results are real; model-written pin URLs are checked by the widget.
-        for source in result.sources:
-            page = await self.fetch(source.uri) if len(pins) < 6 else None
-            if page and page.ok and page.final_url and (url := pin_url(page.final_url)):
-                pins.append((url, source.title[:160]))
+        links = markdown_links(result.text)
+        data = parse_json(result.text)
+        if isinstance(data, dict):  # JSON answers are still accepted
+            links += [
+                (str(entry.get("title", "")), str(entry.get("url", "")))
+                for key in ("pins", "pages")
+                for entry in data.get(key, [])
+                if isinstance(entry, dict)
+            ]
+        # Grounding sources are what search actually returned; their titles are domains.
+        written = {url for _, url in links}
+        links += [("", s.uri) for s in result.sources if s.uri not in written]
+        resolved = await asyncio.gather(*(self._resolve(url) for _, url in links[:24]))
+        pins, pages, seen = [], [], set()
+        for (title, _), url in zip(links, resolved):
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            if pin := pin_url(url):
+                pins.append((pin, title[:160]))
+            elif host_of(url) not in NO_PREVIEW_HOSTS:
+                pages.append((url, title[:160]))
 
-        items, seen = [], set()
+        unique_pins: list[tuple[str, str]] = []
         for url, title in pins:
-            if url not in seen and len(items) < 6:
-                seen.add(url)
-                items.append(InspirationItem(kind="pinterest", url=url, title=title, source="Pinterest"))
-        previews = await asyncio.gather(*(self._preview(url) for url, _ in pages[:4]))
-        for (url, title), preview in zip(pages[:4], previews):
+            if url not in {u for u, _ in unique_pins} and len(unique_pins) < MAX_PINS:
+                unique_pins.append((url, title))
+        thumbs = await asyncio.gather(*(self._pin_image(url) for url, _ in unique_pins))
+        # oEmbed doubles as an existence check for model-written pin URLs; if it is
+        # unreachable altogether, keep the pins and let the widget decide.
+        reachable = any(image for image, _ in thumbs)
+        items, seen = [], set()
+        for (url, title), thumb in zip(unique_pins, thumbs):
+            if reachable and not thumb[0]:
+                continue
+            seen.add(url)
+            items.append(
+                InspirationItem(
+                    kind="pinterest", url=url, title=(title or thumb[1])[:160],
+                    image_url=thumb[0], source="Pinterest",
+                )
+            )
+        previews = await asyncio.gather(*(self._preview(url) for url, _ in pages[:MAX_PAGES]))
+        for (url, title), preview in zip(pages[:MAX_PAGES], previews):
             if preview and preview[1] and url not in seen:
                 seen.add(url)
                 items.append(
                     InspirationItem(
-                        kind="web", url=preview[0], title=preview[2] or title,
+                        kind="web", url=preview[0], title=title or preview[2],
                         image_url=preview[1], source=preview[3],
                     )
                 )
         return items
+
+    async def _resolve(self, url: str) -> str | None:
+        """Follow a grounding redirect to the page it stands for; other URLs are normalised."""
+        clean = normalise_url(url)
+        if not clean or host_of(clean) not in GROUNDING_REDIRECT_HOSTS:
+            return clean
+        page = await self.fetch(clean)
+        # Even a page that blocks our fetch reveals its address through the redirect.
+        final = page.final_url
+        return final if final and host_of(final) not in GROUNDING_REDIRECT_HOSTS else None
+
+    async def _pin_image(self, url: str) -> tuple[str | None, str]:
+        """Pin image and title from Pinterest's public oEmbed endpoint (no scraping)."""
+        page = await self.fetch(f"https://www.pinterest.com/oembed.json?url={quote(url, safe='')}")
+        try:
+            data = json.loads(page.body) if page.ok else {}
+        except json.JSONDecodeError:
+            data = {}
+        thumb = normalise_url(str(data.get("thumbnail_url") or "")) if isinstance(data, dict) else None
+        if not thumb or not host_of(thumb).endswith("pinimg.com"):
+            return None, ""
+        # oEmbed returns a 236px thumbnail; the same image is served at 736px.
+        return thumb.replace("/236x/", "/736x/"), str(data.get("title") or "")
 
     async def _preview(self, url: str):
         page = await self.fetch(url)

@@ -1,34 +1,79 @@
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, ScanLine, Shirt, Armchair, Watch, Check } from 'lucide-react'
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Armchair,
+  Check,
+  MessageCircle,
+  ScanLine,
+  Shirt,
+  Sparkles,
+  Watch,
+} from 'lucide-react'
+import { agentList, agents } from '../lib/agents'
+
+const agentIcons = {
+  food: ScanLine,
+  stylist: Shirt,
+} as const
 
 export function Home() {
   return (
     <div className="home">
-      <section className="hero">
+      <section className="hero" aria-labelledby="home-heading">
         <div className="hero-copy">
           <div className="eyebrow">
-            <span className="dot" /> A LITTLE CLARITY. A BETTER CHOICE.
+            <span className="dot" /> TWO SPECIALISTS. ONE EASIER CART.
           </div>
-          <h1>
-            Good choices
-            <br />
-            start with <em>you.</em>
+          <h1 id="home-heading">
+            Ask. Decide.
+            <br /> Shop with <em>confidence.</em>
           </h1>
           <p>
-            Read between the ingredients. Bring a whole look together. Meet your personal shopping
-            companion.
+            Start a conversation with the specialist you need. Nia makes food labels clearer. Mira
+            builds a complete look around you and your budget.
           </p>
-          <Link className="button" to="/food">
-            Explore food labels <ArrowUpRight size={18} />
-          </Link>
+          <div className="hero-actions" aria-label="Choose a specialist">
+            {agentList.map((agent) => {
+              const Icon = agentIcons[agent.id]
+              return (
+                <Link
+                  className={`button hero-agent-button hero-agent-${agent.id}`}
+                  to={agent.route}
+                  key={agent.id}
+                  aria-label={`Chat with ${agent.name}, ${agent.role}`}
+                >
+                  <Icon size={18} aria-hidden="true" />
+                  <span>
+                    Chat with {agent.name}
+                    <small>{agent.role}</small>
+                  </span>
+                  <ArrowUpRight size={17} aria-hidden="true" />
+                </Link>
+              )
+            })}
+          </div>
+          <span className="hero-assurance">
+            <MessageCircle size={14} aria-hidden="true" /> Just describe what you need — they’ll
+            guide the next step.
+          </span>
         </div>
-        <div className="hero-art" aria-hidden="true">
+        <div
+          className="hero-art"
+          role="img"
+          aria-label="Meet Nia and Mira, your shopping specialists"
+        >
           <div className="orbit orbit-one" />
           <div className="orbit orbit-two" />
-          <div className="art-card art-food">
-            <ScanLine size={30} />
-            <span>A closer look</span>
-            <strong>Know your label.</strong>
+          <div className="art-card art-food" aria-hidden="true">
+            <div className="art-agent-heading">
+              <span className="agent-avatar">N</span>
+              <span>
+                <strong>{agents.food.name}</strong>
+                <small>{agents.food.role}</small>
+              </span>
+            </div>
+            <p>“Let’s take a closer look at that label.”</p>
             <div className="fake-lines">
               <i />
               <i />
@@ -38,9 +83,16 @@ export function Home() {
               <Check size={13} /> Your preferences, considered
             </div>
           </div>
-          <div className="art-card art-look">
-            <Shirt size={57} strokeWidth={1} />
-            <strong>It all comes together.</strong>
+          <div className="art-card art-look" aria-hidden="true">
+            <div className="art-agent-heading">
+              <span className="agent-avatar">M</span>
+              <span>
+                <strong>{agents.stylist.name}</strong>
+                <small>{agents.stylist.role}</small>
+              </span>
+            </div>
+            <Shirt size={46} strokeWidth={1} />
+            <p>“I’ll bring the whole look together.”</p>
             <div className="palette">
               <i />
               <i />
@@ -49,54 +101,66 @@ export function Home() {
             </div>
           </div>
           <div className="art-sticker">
-            A little more
+            Help that feels
             <br />
-            <em>intent.</em>
+            <em>personal.</em>
           </div>
         </div>
       </section>
-      <section className="home-section">
+      <section className="home-section" aria-labelledby="specialists-heading">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">WHAT'S ON YOUR MIND?</span>
-            <h2>One companion. Two ways to shop.</h2>
+            <span className="eyebrow">WHO CAN HELP TODAY?</span>
+            <h2 id="specialists-heading">Meet your shopping specialists.</h2>
           </div>
-          <span className="muted">Made for your everyday decisions</span>
+          <span className="muted">Choose one and start with a simple message</span>
         </div>
         <div className="flow-grid">
-          <Link className="flow-card food-card" to="/food">
-            <div className="flow-icon">
-              <ScanLine size={26} />
-            </div>
-            <span className="eyebrow">01 / FOOD</span>
-            <h2>
-              What's in it
-              <br />
-              for you?
-            </h2>
-            <p>
-              Chat with your food companion to decode chemical additives, spot good vs bad ingredients,
-              and compare country regulations.
-            </p>
-            <span className="flow-link">
-              Explore food ingredients <ArrowUpRight size={20} />
-            </span>
-          </Link>
-          <Link className="flow-card clothes-card" to="/clothes">
-            <div className="flow-icon">
-              <Shirt size={26} />
-            </div>
-            <span className="eyebrow">02 / CLOTHES</span>
-            <h2>
-              Your occasion.
-              <br />
-              Your kind of look.
-            </h2>
-            <p>Tell your stylist about the occasion. Explore ideas and find options together.</p>
-            <span className="flow-link">
-              Shop a look <ArrowUpRight size={20} />
-            </span>
-          </Link>
+          {agentList.map((agent, index) => {
+            const Icon = agentIcons[agent.id]
+            return (
+              <article
+                className={`flow-card ${agent.id === 'food' ? 'food-card' : 'clothes-card'}`}
+                key={agent.id}
+              >
+                <div className="flow-icon" aria-hidden="true">
+                  <Icon size={26} />
+                </div>
+                <span className="eyebrow">
+                  0{index + 1} / {agent.shortRole.toUpperCase()}
+                </span>
+                <div className="agent-title-row">
+                  <h2>{agent.name}</h2>
+                  <span>{agent.role}</span>
+                </div>
+                <p>{agent.description}</p>
+                <ul className="agent-capabilities" aria-label={`${agent.name} can help you`}>
+                  {agent.capabilities.map((capability) => (
+                    <li key={capability}>
+                      <Check size={13} aria-hidden="true" /> {capability}
+                    </li>
+                  ))}
+                </ul>
+                <div className="example-prompt">
+                  <Sparkles size={15} aria-hidden="true" />
+                  <span>
+                    <small>TRY ASKING</small>“{agent.examplePrompt}”
+                  </span>
+                </div>
+                <Link
+                  className="flow-link"
+                  to={agent.route}
+                  aria-label={`Chat with ${agent.name}, ${agent.role}`}
+                >
+                  <span>
+                    Chat with {agent.name}
+                    <small>Open a new conversation</small>
+                  </span>
+                  <ArrowRight size={20} aria-hidden="true" />
+                </Link>
+              </article>
+            )
+          })}
         </div>
       </section>
       <section className="coming-row">

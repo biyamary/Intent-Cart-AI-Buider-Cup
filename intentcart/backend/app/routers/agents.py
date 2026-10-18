@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 
 from app.agents.conversation_schemas import (
@@ -6,6 +8,8 @@ from app.agents.conversation_schemas import (
     ChatRequest,
     Conversation,
     ConversationSummary,
+    DeletedConversations,
+    TurnStatus,
 )
 from app.agents.conversations import ConversationService
 from app.auth import current_user
@@ -24,6 +28,14 @@ async def list_agents(
     uid: str = Depends(current_user), service: ConversationService = Depends(conversations)
 ):
     return service.available_agents()
+
+
+@router.delete("/sessions", response_model=DeletedConversations)
+async def delete_all_conversations(
+    uid: str = Depends(current_user), service: ConversationService = Depends(conversations)
+):
+    """Permanently delete all of the user's Nia and Mira conversations."""
+    return await service.delete_all(uid)
 
 
 @router.post("/{agent_id}/sessions", response_model=Conversation, status_code=201)
@@ -64,6 +76,36 @@ async def send_message(
     service: ConversationService = Depends(conversations),
 ):
     return await service.send(agent_id, uid, session_id, body, await profile_for(store, uid))
+
+
+@router.post(
+    "/{agent_id}/sessions/{session_id}/turns",
+    response_model=TurnStatus,
+    status_code=202,
+)
+async def accept_turn(
+    agent_id: str,
+    session_id: str,
+    body: ChatRequest,
+    uid: str = Depends(current_user),
+    store: Store = Depends(get_store),
+    service: ConversationService = Depends(conversations),
+):
+    """Accept a turn for background execution; poll its request_id for progress."""
+    return await service.accept(agent_id, uid, session_id, body, await profile_for(store, uid))
+
+
+@router.get(
+    "/{agent_id}/sessions/{session_id}/turns/{request_id}", response_model=TurnStatus
+)
+async def get_turn(
+    agent_id: str,
+    session_id: str,
+    request_id: UUID,
+    uid: str = Depends(current_user),
+    service: ConversationService = Depends(conversations),
+):
+    return await service.get_turn(agent_id, uid, session_id, request_id)
 
 
 @router.post(

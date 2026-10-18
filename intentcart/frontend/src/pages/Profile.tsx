@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useLookStore } from '../store/lookStore'
 import { commaList, countries, type Country, type Profile as ProfileData } from '../lib/types'
 import { PageTitle, ErrorMessage } from '../components/Feedback'
 
@@ -157,6 +159,68 @@ function ProfileForm({ profile }: { profile: ProfileData }) {
   )
 }
 
+const chatQueries = ['food-sessions', 'food-session', 'stylist-sessions', 'stylist-session', 'look']
+
+function DeleteChats() {
+  const cache = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const remove = useMutation({
+    mutationFn: () =>
+      api<{ conversations: number; looks: number }>('/agents/sessions', { method: 'DELETE' }),
+    onSuccess: () => {
+      setConfirming(false)
+      useLookStore.getState().setLook(null)
+      for (const key of chatQueries) cache.removeQueries({ queryKey: [key] })
+    },
+  })
+  const deleted = remove.data?.conversations
+  return (
+    <section className="panel stack danger-zone" aria-labelledby="delete-chats-heading">
+      <div>
+        <span className="eyebrow">YOUR CONVERSATIONS</span>
+        <h3 id="delete-chats-heading">Delete all chats</h3>
+        <p>
+          Permanently deletes every conversation with Nia and Mira, including attached photos,
+          generated images and Mira's look boards. This cannot be undone.
+        </p>
+      </div>
+      <ErrorMessage error={remove.error} />
+      {remove.isSuccess && (
+        <div className="notice success" role="status">
+          {deleted === 0
+            ? 'There were no chats to delete.'
+            : `Deleted ${deleted} ${deleted === 1 ? 'chat' : 'chats'} permanently.`}
+        </div>
+      )}
+      {confirming ? (
+        <div className="danger-actions" role="group" aria-label="Confirm deleting all chats">
+          <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            <Trash2 size={16} />
+            {remove.isPending ? 'Deleting…' : 'Yes, delete everything'}
+          </button>
+          <button
+            className="secondary"
+            disabled={remove.isPending}
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          className="danger-outline"
+          onClick={() => {
+            remove.reset()
+            setConfirming(true)
+          }}
+        >
+          <Trash2 size={16} /> Delete all chats
+        </button>
+      )}
+    </section>
+  )
+}
+
 export function Profile() {
   const query = useQuery({ queryKey: ['profile'], queryFn: () => api<ProfileData>('/profile') })
   return (
@@ -171,6 +235,7 @@ export function Profile() {
           {query.isPending && <div className="panel">Loading your preferences…</div>}
           <ErrorMessage error={query.error} />
           {query.data && <ProfileForm profile={query.data} />}
+          <DeleteChats />
         </div>
         <aside className="panel tinted">
           <h3>

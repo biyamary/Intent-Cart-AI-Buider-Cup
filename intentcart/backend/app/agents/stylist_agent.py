@@ -68,6 +68,8 @@ def create_stylist_agent(settings: Settings, services: ShopServices | None = Non
                     look = await services.looks.get(context.user_id, look_id)
                 except LookError:
                     look = None
+            if look is None:
+                look = await services.looks.find_for_session(context.user_id, context.session.id)
             parts.append(describe_look(look))
         return "\n\n".join(parts)
 

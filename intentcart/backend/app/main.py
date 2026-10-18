@@ -13,13 +13,14 @@ from app.agents.conversations import (
 from app.agents.food_pipeline import FoodPipeline
 from app.agents.google_client import configure_adk_environment
 from app.agents.runtime import AgentRuntime
+from app.auth import LoginThrottle
 from app.clothes.discovery import Discovery
 from app.clothes.service import LookService
 from app.clothes.studio import Studio
 from app.clothes.tools import ShopServices
 from app.config import Settings, get_settings
 from app.memory.store import FirestoreStore, MemoryStore
-from app.routers import agents, clothes, food, profile
+from app.routers import agents, auth, clothes, food, profile
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -50,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="IntentCart API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
+    app.state.login_throttle = LoginThrottle()
     app.state.store = (
         FirestoreStore(settings.google_cloud_project)
         if settings.store_backend == "firestore"
@@ -63,7 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_methods=["GET", "POST", "PUT"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -78,7 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "store": settings.store_backend,
         }
 
-    for router in (profile.router, food.router, clothes.router, agents.router):
+    for router in (auth.router, profile.router, food.router, clothes.router, agents.router):
         app.include_router(router, prefix="/api")
 
     dist = settings.frontend_dist.resolve()

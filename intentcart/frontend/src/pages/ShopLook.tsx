@@ -1,31 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import {
-  ArrowUp,
-  ImagePlus,
-  LayoutGrid,
-  MessageSquare,
-  Plus,
-  Search,
-  Sparkles,
-  X,
-} from 'lucide-react'
+import { ArrowUp, ImagePlus, LayoutGrid, MessageSquare, Search, Sparkles, X } from 'lucide-react'
 import { api, post, upload } from '../lib/api'
+import { useAgentTurn } from '../lib/agentTurns'
+import { agents as agentProfiles } from '../lib/agents'
 import type { AgentInfo, Conversation, ConversationSummary } from '../lib/conversations'
 import { AgentMessage } from '../components/AgentMessage'
+import { AgentProgress } from '../components/AgentProgress'
 import { AuthedImage } from '../components/BoardMedia'
-import { ErrorMessage, PageTitle } from '../components/Feedback'
+import { ErrorMessage } from '../components/Feedback'
 import { LookPanel } from '../components/LookPanel'
+import { SessionRail } from '../components/SessionRail'
 import '../look-board.css'
 
 const sessionPath = '/agents/stylist/sessions'
+const stylistPresentation = agentProfiles.stylist
 const starters = [
-  'Help me recreate this Mehendi look, but with more affordable accessories.',
-  "I want an outfit for my sister's mehendi.",
-  'I need a smart casual look for a work dinner under ₹5,000.',
+  "I'm going to a wedding but don't know what to wear. Help me find ideas.",
+  'Help me recreate this Mehendi look with affordable accessories.',
+  'Build a smart-casual work dinner look under ₹5,000.',
 ]
 const imageTypes = ['image/jpeg', 'image/png', 'image/webp']
+const stylistProgress = [
+  { id: 'queued', label: 'Waiting to start' },
+  { id: 'understanding', label: 'Understanding your request' },
+  { id: 'planning', label: 'Planning the next steps' },
+  { id: 'searching', label: 'Searching stores and sources' },
+  { id: 'preparing', label: 'Preparing your answer' },
+]
 
 export function ShopLook() {
   const cache = useQueryClient()
@@ -34,9 +37,10 @@ export function ShopLook() {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<string[]>([])
   const [view, setView] = useState<'chat' | 'board'>('chat')
-  const end = useRef<HTMLDivElement>(null)
+  const messagePane = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const filePicker = useRef<HTMLInputElement>(null)
+
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<AgentInfo[]>('/agents') })
   const stylist = agents.data?.find((agent) => agent.id === 'stylist')
   const enabled = stylist?.enabled ?? false
@@ -70,85 +74,144 @@ export function ShopLook() {
     },
     onSuccess: (name) => setAttachments((current) => [...current, name].slice(-3)),
   })
-  const send = useMutation({
-    retry: false,
-    mutationFn: async (body: { text: string; request_id: string; attachments: string[] }) => {
-      const id = await ensureSession()
+
+  const turn = useAgentTurn<{ text: string; request_id: string; attachments: string[] }>({
+    agentId: 'stylist',
+    ensureSession,
+    onAccepted: () => {
+      setDraft('')
+      setAttachments([])
+    },
+    onFinished: async (_status, id) => {
       try {
-        const conversation = await post<Conversation>(`${sessionPath}/${id}/messages`, body)
-        cache.setQueryData(['stylist-session', id], conversation)
-        return conversation
+        const updated = await api<Conversation>(`${sessionPath}/${id}`)
+        cache.setQueryData(['stylist-session', id], updated)
       } finally {
-        void cache.invalidateQueries({ queryKey: ['stylist-session', id] })
-        void cache.invalidateQueries({ queryKey: ['stylist-sessions'] })
-        void cache.invalidateQueries({ queryKey: ['look'] })
+        await Promise.all([
+          cache.invalidateQueries({ queryKey: ['stylist-session', id] }),
+          cache.invalidateQueries({ queryKey: ['stylist-sessions'] }),
+          cache.invalidateQueries({ queryKey: ['look'] }),
+        ])
       }
     },
   })
+
   const conversation = useQuery({
     queryKey: ['stylist-session', sessionId],
     queryFn: () => api<Conversation>(`${sessionPath}/${sessionId}`),
-    enabled: Boolean(sessionId) && !send.isPending,
+    enabled: Boolean(sessionId) && !turn.isRunning,
     staleTime: 30_000,
     retry: false,
   })
+
   const messages = conversation.data?.messages ?? []
   const lookId = conversation.data?.look_id ?? null
-  const pending = send.isPending ? send.variables : null
-  const busy = send.isPending || attach.isPending || (Boolean(sessionId) && conversation.isPending)
+  const chatTitle =
+    conversation.data?.title && conversation.data.title !== 'New look'
+      ? conversation.data.title
+      : "Let's find your kind of look."
+  const acceptedUserSaved = messages.some(
+    (message) =>
+      message.role === 'user' &&
+      message.text === turn.activeRequest?.text &&
+      message.created_at * 1000 >= (turn.startedAt ?? 0) - 1000,
+  )
+  const pending =
+    (turn.sessionId === sessionId || (!sessionId && turn.sessionId)) && !acceptedUserSaved
+      ? turn.activeRequest
+      : null
+  const busy = turn.isRunning || attach.isPending || (Boolean(sessionId) && conversation.isPending)
+
   useEffect(() => {
-    end.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
-  }, [messages.length, send.isPending])
+    const pane = messagePane.current
+    if (pane) pane.scrollTo({ top: pane.scrollHeight, behavior: 'auto' })
+  }, [messages.length, turn.isRunning, turn.status?.progress.stage])
+
+  function send(value: string) {
+    const text = value.trim()
+    if (!text || busy || !enabled || conversation.isError) return
+    const body = { text, request_id: crypto.randomUUID(), attachments }
+    turn.send.mutate(body)
+  }
 
   function submit() {
-    const text = draft.trim()
-    if (!text || busy || !enabled || conversation.isError) return
-    send.mutate({ text, request_id: crypto.randomUUID(), attachments })
-    setDraft('')
-    setAttachments([])
+    send(draft)
   }
+
   function selectConversation(id?: string) {
     setParams(id ? { chat: id } : {})
     setDraft('')
     setAttachments([])
     setView('chat')
-    send.reset()
+    turn.send.reset()
     attach.reset()
   }
+
+  function refineLook(prompt: string, sendNow = false) {
+    setView('chat')
+    if (sendNow && !busy) {
+      send(prompt)
+      return
+    }
+    setDraft(prompt)
+    window.requestAnimationFrame(() => composer.current?.focus())
+  }
+
+  const lastMessage = messages[messages.length - 1]
+  const quickReplies =
+    !pending && lastMessage?.role === 'assistant' ? (lastMessage.suggestions ?? []) : []
+
   const imagePath = (name: string) => `${sessionPath}/${sessionId}/artifacts/${name}`
 
   const chat = (
-    <section className="panel conversation-panel" aria-label="Shop a look conversation">
-      <div className="conversation-heading">
+    <section className="panel conversation-panel" aria-labelledby="stylist-chat-title">
+      <div className="conversation-heading compact-conversation-heading">
         <div>
           <span className="stylist-avatar">
             <Sparkles size={18} />
           </span>
-          <div>
-            <h2>Your personal stylist</h2>
-            <span className="muted">From an idea to a complete look</span>
+          <div className="agent-chat-title">
+            <span className="eyebrow">
+              {stylistPresentation.name} · {stylistPresentation.role}
+            </span>
+            <h1 id="stylist-chat-title">{chatTitle}</h1>
           </div>
         </div>
-        {searchEnabled && (
-          <span className="search-capability">
-            <Search size={13} /> Live store search
+        <div className="conversation-heading-status">
+          {searchEnabled && (
+            <span className="search-capability">
+              <Search size={13} /> Live store search
+            </span>
+          )}
+          <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
+            {enabled ? 'Ready' : 'Offline'}
           </span>
-        )}
+        </div>
       </div>
-      <ErrorMessage error={agents.error || conversation.error} />
-      {agents.isSuccess && !enabled && (
-        <div className="notice">
-          Live chat is not enabled in this environment. You can still explore the{' '}
-          <Link className="text-link" to="/clothes/board">
-            sample look board ↗
-          </Link>
-          .
+
+      <ErrorMessage error={agents.error} />
+      {conversation.isError && (
+        <div className="notice error conversation-load-error" role="alert">
+          <span>{conversation.error.message}</span>
+          <button className="text-button" type="button" onClick={() => void conversation.refetch()}>
+            Try loading again
+          </button>
         </div>
       )}
+      {agents.isSuccess && !enabled && (
+        <div className="notice">
+          Live styling chat is not enabled in this environment. You can still explore the{' '}
+          <Link className="text-link" to="/clothes/board">
+            sample look board →
+          </Link>
+        </div>
+      )}
+
       <div
+        ref={messagePane}
         className="conversation-messages"
         role="log"
-        aria-label="Conversation messages"
+        aria-label="Style conversation messages"
         aria-live="polite"
       >
         {!sessionId && !pending && (
@@ -158,8 +221,8 @@ export function ShopLook() {
             </div>
             <h3>What are you dressing for?</h3>
             <p>
-              Describe the occasion or attach a photo of a look you love. We'll build a checklist,
-              find matching pieces (including small businesses) and keep it all within budget.
+              Tell Mira the occasion and your budget, attach a look you love, or just say where
+              you're going and Mira will help you find ideas.
             </p>
             <div className="conversation-starters">
               {starters.map((text) => (
@@ -173,21 +236,24 @@ export function ShopLook() {
                   }}
                 >
                   {text}
-                  <span aria-hidden="true">↗</span>
+                  <span aria-hidden="true">→</span>
                 </button>
               ))}
             </div>
           </div>
         )}
-        {sessionId && conversation.isPending && !send.isPending && (
+        {sessionId && conversation.isPending && !turn.isRunning && (
           <p className="chat-loading">Loading your conversation…</p>
         )}
         {sessionId && conversation.isSuccess && !messages.length && !pending && (
-          <p className="chat-loading">Tell your stylist about the occasion to get started.</p>
+          <p className="chat-loading">Tell Mira about the occasion to get started.</p>
         )}
         {messages.map((message) => (
           <div key={message.id}>
-            <AgentMessage message={message} agentName="IntentCart stylist" />
+            <AgentMessage
+              message={message}
+              agentName={`${stylistPresentation.name} · ${stylistPresentation.role}`}
+            />
             {message.attachments && message.attachments.length > 0 && sessionId && (
               <div className="message-attachments">
                 {message.attachments.map((name) => (
@@ -197,6 +263,21 @@ export function ShopLook() {
             )}
           </div>
         ))}
+        {quickReplies.length > 0 && (
+          <div className="quick-replies" role="group" aria-label="Quick replies">
+            {quickReplies.map((reply) => (
+              <button
+                key={reply}
+                type="button"
+                className="secondary small"
+                disabled={busy || !enabled}
+                onClick={() => send(reply)}
+              >
+                {reply}
+              </button>
+            ))}
+          </div>
+        )}
         {pending && (
           <>
             <article className="chat-message from-user">
@@ -211,14 +292,26 @@ export function ShopLook() {
                 </p>
               )}
             </article>
-            <div className="agent-working" role="status">
-              <span className="working-dot" /> Your stylist is working on it…
-            </div>
+            <AgentProgress
+              agentName="Mira is working"
+              startedAt={turn.startedAt}
+              stage={turn.status?.progress.stage}
+              label={turn.status?.progress.label}
+              stages={stylistProgress}
+            />
           </>
         )}
-        <div ref={end} />
       </div>
-      <ErrorMessage error={send.error || attach.error} />
+
+      {turn.pollError && turn.activeRequest && (
+        <div className="notice amber progress-connection-notice" role="status">
+          <span>Your look is still running, but progress could not be refreshed.</span>
+          <button className="text-button" type="button" onClick={() => void turn.retryProgress()}>
+            Reconnect
+          </button>
+        </div>
+      )}
+      <ErrorMessage error={turn.send.error || attach.error} />
       {attachments.length > 0 && sessionId && (
         <div className="composer-attachments">
           {attachments.map((name) => (
@@ -227,7 +320,7 @@ export function ShopLook() {
               <button
                 type="button"
                 aria-label="Remove image"
-                onClick={() => setAttachments((current) => current.filter((n) => n !== name))}
+                onClick={() => setAttachments((current) => current.filter((item) => item !== name))}
               >
                 <X size={12} />
               </button>
@@ -237,8 +330,8 @@ export function ShopLook() {
       )}
       <form
         className="chat-composer"
-        onSubmit={(e) => {
-          e.preventDefault()
+        onSubmit={(event) => {
+          event.preventDefault()
           submit()
         }}
       >
@@ -247,10 +340,10 @@ export function ShopLook() {
           type="file"
           accept={imageTypes.join(',')}
           hidden
-          onChange={(e) => {
-            const file = e.target.files?.[0]
+          onChange={(event) => {
+            const file = event.target.files?.[0]
             if (file) attach.mutate(file)
-            e.target.value = ''
+            event.target.value = ''
           }}
         />
         <button
@@ -264,7 +357,7 @@ export function ShopLook() {
           <ImagePlus size={19} />
         </button>
         <label className="sr-only" htmlFor="style-message">
-          Message your stylist
+          Message Mira
         </label>
         <textarea
           id="style-message"
@@ -273,15 +366,13 @@ export function ShopLook() {
           maxLength={4000}
           disabled={busy || !enabled}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
           placeholder={
-            attachments.length
-              ? 'What should we do with this look?'
-              : "Describe the occasion or a look you'd like…"
+            attachments.length ? 'What should Mira change?' : 'Describe the occasion or look…'
           }
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault()
               submit()
             }
           }}
@@ -295,118 +386,115 @@ export function ShopLook() {
       </form>
       <p className="fine-print chat-footer-note">
         {searchEnabled
-          ? 'Products are checked on each store page. Prices and stock can change; confirm with the store.'
-          : 'Style ideas and outfit planning. Live product search is currently unavailable.'}
+          ? 'Prices and availability can change. Confirm the final details with the store.'
+          : 'Style planning is available; live product search is currently unavailable.'}
       </p>
     </section>
   )
 
-  const historyPanel = (
-    <section className="panel">
-      <h3>
-        <MessageSquare size={16} /> Recent looks
-      </h3>
-      <ErrorMessage error={history.error} />
-      {history.isPending && <p>Loading conversations…</p>}
-      {history.data?.length ? (
-        <div className="history-list">
-          {history.data.map((item) => (
-            <button
-              key={item.id}
-              className={`history-item ${sessionId === item.id ? 'current-conversation' : ''}`}
-              disabled={send.isPending}
-              onClick={() => selectConversation(item.id)}
-            >
-              <strong>{item.title}</strong>
-              <span>{new Date(item.updated_at * 1000).toLocaleDateString()} · Continue ↗</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        history.isSuccess && <p>Your looks will appear here.</p>
-      )}
-    </section>
-  )
-
-  const sidebar = (
-    <aside className="stack conversation-sidebar">
-      <button className="secondary" disabled={send.isPending} onClick={() => selectConversation()}>
-        <Plus size={16} /> Start a new look
-      </button>
-      <section className="panel tinted">
-        <span className="eyebrow">HOW IT WORKS</span>
-        <h3>
-          Idea → checklist →
-          <br />
-          the complete look.
-        </h3>
-        <p>
-          Share an occasion, a photo and your budget. Approve a checklist, then choose pieces one by
-          one as matching products appear on your board.
-        </p>
-        <Link className="text-link" to="/profile">
-          Edit style preferences ↗
-        </Link>
-      </section>
-      {historyPanel}
-      <Link className="text-link sample-board-link" to="/clothes/board">
-        Explore the sample look board ↗
-      </Link>
-    </aside>
-  )
-
   return (
-    <>
-      <PageTitle
-        eyebrow="SHOP A LOOK"
-        title="Let's find your kind of look."
-        description="Start with an occasion, a photo, or a style you love. Your stylist builds the checklist, finds the pieces and keeps you on budget."
-      />
-      {lookId && sessionId ? (
-        <>
-          <div className="view-switch" role="tablist" aria-label="Show">
-            <button
-              role="tab"
-              aria-selected={view === 'chat'}
-              className={view === 'chat' ? 'selected' : ''}
-              onClick={() => setView('chat')}
-            >
-              <MessageSquare size={14} /> Chat
-            </button>
-            <button
-              role="tab"
-              aria-selected={view === 'board'}
-              className={view === 'board' ? 'selected' : ''}
-              onClick={() => setView('board')}
-            >
-              <LayoutGrid size={14} /> Look board
-            </button>
-          </div>
-          <div className={`style-chat-layout with-board show-${view}`}>
-            <div className="stack chat-column">
-              {chat}
-              <div className="board-tools">
+    <div className="agent-page stylist-agent-page">
+      <div className={`agent-workspace ${lookId ? 'has-look-board' : ''}`}>
+        <SessionRail
+          title="Saved looks"
+          newLabel="New look"
+          disabled={turn.isRunning}
+          onNew={() => selectConversation()}
+          footer={
+            <Link className="text-link" to="/clothes/board">
+              Explore the sample board →
+            </Link>
+          }
+        >
+          <section className="session-group">
+            <h3>
+              <MessageSquare size={15} /> Recent looks
+            </h3>
+            <ErrorMessage error={history.error} />
+            {history.isPending && <p className="muted">Loading looks…</p>}
+            {history.data?.length ? (
+              <div className="history-list">
+                {history.data.map((item) => (
+                  <button
+                    key={item.id}
+                    data-close-session-rail
+                    aria-current={sessionId === item.id ? 'page' : undefined}
+                    className={`history-item ${sessionId === item.id ? 'current-conversation' : ''}`}
+                    disabled={turn.isRunning}
+                    onClick={() => selectConversation(item.id)}
+                  >
+                    <strong>{item.title}</strong>
+                    <span>{new Date(item.updated_at * 1000).toLocaleDateString()} · Continue</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              history.isSuccess && <p className="muted">Your looks will appear here.</p>
+            )}
+          </section>
+
+          <section className="session-group session-help">
+            <span className="eyebrow">HOW IT WORKS</span>
+            <ol>
+              <li>Share the occasion and total budget.</li>
+              <li>Review Mira's item and budget plan.</li>
+              <li>Choose products or refine the whole look.</li>
+            </ol>
+            <Link className="text-link" to="/profile" data-close-session-rail>
+              Edit style preferences →
+            </Link>
+          </section>
+        </SessionRail>
+
+        <div className="agent-workspace-primary">
+          {lookId && sessionId ? (
+            <>
+              <div className="view-switch" role="tablist" aria-label="Workspace view">
                 <button
-                  className="secondary"
-                  disabled={send.isPending}
-                  onClick={() => selectConversation()}
+                  id="look-board-tab"
+                  role="tab"
+                  aria-controls="look-board-panel"
+                  aria-selected={view === 'board'}
+                  className={view === 'board' ? 'selected' : ''}
+                  onClick={() => setView('board')}
                 >
-                  <Plus size={16} /> Start a new look
+                  <LayoutGrid size={14} /> Look board
+                </button>
+                <button
+                  id="look-chat-tab"
+                  role="tab"
+                  aria-controls="look-chat-panel"
+                  aria-selected={view === 'chat'}
+                  className={view === 'chat' ? 'selected' : ''}
+                  onClick={() => setView('chat')}
+                >
+                  <MessageSquare size={14} /> Chat with Mira
                 </button>
               </div>
-              {historyPanel}
-            </div>
-            <div className="board-column">
-              <LookPanel lookId={lookId} sessionId={sessionId} />
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="style-chat-layout">
-          {chat}
-          {sidebar}
+              <div className={`style-chat-layout with-board show-${view}`}>
+                <div
+                  id="look-board-panel"
+                  className="board-column"
+                  role="tabpanel"
+                  aria-labelledby="look-board-tab"
+                >
+                  <LookPanel lookId={lookId} sessionId={sessionId} onRefine={refineLook} />
+                </div>
+                <div
+                  id="look-chat-panel"
+                  className="chat-column"
+                  role="tabpanel"
+                  aria-labelledby="look-chat-tab"
+                >
+                  {chat}
+                </div>
+              </div>
+            </>
+          ) : (
+            chat
+          )}
         </div>
-      )}
-    </>
+      </div>
+    </div>
   )
 }

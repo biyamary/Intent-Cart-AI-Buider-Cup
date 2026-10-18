@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 1100" role="img" aria-labelledby="title desc">
+  <title id="title">IntentCart named agents landing page, mobile concept</title>
+  <desc id="desc">Mobile landing page with stacked chat actions for Nia and Mira and the first specialist card visible below.</desc>
+  <defs><filter id="s" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#183d34" flood-opacity=".1"/></filter><style>.ui{font-family:Inter,Segoe UI,sans-serif}.serif{font-family:Georgia,serif}.ink{fill:#183d34}.muted{fill:#6b766f}.eye{font:700 8px Inter,Segoe UI,sans-serif;letter-spacing:1.4px;fill:#5f7365}.small{font:500 10px Inter,Segoe UI,sans-serif}.label{font:650 12px Inter,Segoe UI,sans-serif}.body{font:400 12px Inter,Segoe UI,sans-serif}</style></defs>
+  <rect width="390" height="1100" fill="#f7f7f2"/>
+  <rect width="390" height="68" fill="#fff"/><line x1="0" y1="68" x2="390" y2="68" stroke="#dfe4dc"/>
+  <rect x="20" y="18" width="31" height="32" rx="9" fill="#183d34"/><path d="M29 31h14l-1 11H30zM32 31c0-4 8-4 8 0" fill="none" stroke="#e7edcf" stroke-width="1.5"/>
+  <text x="59" y="40" class="ui ink" font-size="21" font-weight="650">intentcart<tspan fill="#7f9c4d">.</tspan></text><text x="245" y="39" class="small muted">Food</text><text x="294" y="39" class="small muted">Clothes</text><circle cx="363" cy="34" r="9" fill="none" stroke="#6b766f"/>
+  <rect y="68" width="390" height="30" fill="#ecf0e5"/><text x="195" y="87" text-anchor="middle" class="ui muted" font-size="8">CONVERSATIONAL AGENTS · LIVE SEARCH</text>
+
+  <g transform="translate(20 132)">
+    <circle cx="3" cy="3" r="3" fill="#8da85d"/><text x="13" y="6" class="eye">TWO SPECIALISTS. ONE EASIER CART.</text>
+    <text x="0" y="58" class="ui ink" font-size="46" font-weight="500" letter-spacing="-2.5">Ask. Decide.</text><text x="0" y="106" class="ui ink" font-size="46" font-weight="500" letter-spacing="-2.5">Shop with</text><text x="0" y="153" class="serif" fill="#6b8251" font-size="49" font-style="italic">confidence.</text>
+    <text x="0" y="190" class="body muted">Start a conversation with the specialist you need.</text><text x="0" y="209" class="body muted">Nia makes food clearer. Mira builds your whole look.</text>
+    <rect x="0" y="237" width="350" height="58" rx="9" fill="#183d34"/><circle cx="25" cy="266" r="11" fill="none" stroke="#fff"/><text x="46" y="262" class="label" fill="#fff">Chat with Nia</text><text x="46" y="278" class="small" fill="#cddccf">Food Guide</text><text x="329" y="271" fill="#fff" font-size="19">→</text>
+    <rect x="0" y="305" width="350" height="58" rx="9" fill="#f3efe4" stroke="#d8d0bd"/><path d="M17 325l8-5 8 5v15H17z" fill="none" stroke="#183d34"/><text x="46" y="330" class="label ink">Chat with Mira</text><text x="46" y="346" class="small muted">Personal Stylist</text><text x="329" y="339" class="ink" font-size="19">→</text>
+    <text x="0" y="388" class="small muted">◯  Just describe what you need — they’ll guide you.</text>
+  </g>
+
+  <g transform="translate(45 555)" filter="url(#s)">
+    <rect width="190" height="142" rx="13" fill="#fffdf6" stroke="#e6e5d7" transform="rotate(-5 95 71)"/>
+    <circle cx="42" cy="38" r="17" fill="#183d34"/><text x="42" y="44" text-anchor="middle" class="serif" font-size="17" fill="#fff">N</text><text x="67" y="36" class="label ink">Nia</text><text x="67" y="51" class="small muted">Food Guide</text><text x="27" y="82" class="serif ink" font-size="12">“Let’s check that label.”</text><rect x="27" y="99" width="133" height="5" rx="3" fill="#e7eadb"/><rect x="27" y="112" width="102" height="5" rx="3" fill="#e7eadb"/>
+  </g>
+  <g transform="translate(172 626)" filter="url(#s)">
+    <rect width="177" height="139" rx="13" fill="#e7eddd" stroke="#d9e2cb" transform="rotate(6 88 70)"/><circle cx="37" cy="36" r="17" fill="#6f805a"/><text x="37" y="42" text-anchor="middle" class="serif" font-size="17" fill="#fff">M</text><text x="62" y="34" class="label ink">Mira</text><text x="62" y="49" class="small muted">Personal Stylist</text><path d="M71 72l17-10 17 10-7 13v28H78V85z" fill="none" stroke="#6f805a"/><text x="25" y="129" class="serif ink" font-size="11">“Let’s build your look.”</text>
+  </g>
+
+  <line x1="20" y1="795" x2="370" y2="795" stroke="#dfe4dc"/><text x="20" y="827" class="eye">WHO CAN HELP TODAY?</text><text x="20" y="861" class="ui ink" font-size="25" font-weight="500">Meet your specialists.</text>
+  <g transform="translate(20 884)">
+    <rect width="350" height="190" rx="12" fill="#edf2e5" stroke="#dce3d2"/><text x="20" y="28" class="eye">01 / FOOD</text><text x="20" y="69" class="serif ink" font-size="32">Nia</text><text x="79" y="67" class="label muted">|  Food Guide</text><text x="20" y="94" class="small muted">Decode labels and compare ingredients for your needs.</text>
+    <rect x="20" y="112" width="310" height="41" rx="7" fill="#fff" fill-opacity=".65"/><text x="31" y="128" class="eye">TRY ASKING</text><text x="31" y="145" class="serif ink" font-size="11">“Is this cereal a good everyday option?”</text><text x="20" y="178" class="label ink">Chat with Nia</text><text x="330" y="178" text-anchor="end" class="ink" font-size="18">→</text>
+  </g>
+</svg>
