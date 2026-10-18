@@ -7,7 +7,6 @@ import { useAgentTurn } from '../lib/agentTurns'
 import { agents as agentProfiles } from '../lib/agents'
 import type { AgentInfo, Conversation, ConversationSummary } from '../lib/conversations'
 import { AgentMessage } from '../components/AgentMessage'
-import { AgentPageHeader } from '../components/AgentPageHeader'
 import { AgentProgress } from '../components/AgentProgress'
 import { AuthedImage } from '../components/BoardMedia'
 import { ErrorMessage } from '../components/Feedback'
@@ -107,6 +106,10 @@ export function ShopLook() {
 
   const messages = conversation.data?.messages ?? []
   const lookId = conversation.data?.look_id ?? null
+  const chatTitle =
+    conversation.data?.title && conversation.data.title !== 'New look'
+      ? conversation.data.title
+      : "Let's find your kind of look."
   const acceptedUserSaved = messages.some(
     (message) =>
       message.role === 'user' &&
@@ -149,22 +152,29 @@ export function ShopLook() {
   const imagePath = (name: string) => `${sessionPath}/${sessionId}/artifacts/${name}`
 
   const chat = (
-    <section className="panel conversation-panel" aria-label="Mira personal stylist conversation">
-      <div className="conversation-heading">
+    <section className="panel conversation-panel" aria-labelledby="stylist-chat-title">
+      <div className="conversation-heading compact-conversation-heading">
         <div>
           <span className="stylist-avatar">
             <Sparkles size={18} />
           </span>
-          <div>
-            <h2>
+          <div className="agent-chat-title">
+            <span className="eyebrow">
               {stylistPresentation.name} · {stylistPresentation.role}
-            </h2>
-            <span className="muted">From an idea to a complete look</span>
+            </span>
+            <h1 id="stylist-chat-title">{chatTitle}</h1>
           </div>
         </div>
-        <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
-          {enabled ? 'Ready' : 'Offline'}
-        </span>
+        <div className="conversation-heading-status">
+          {searchEnabled && (
+            <span className="search-capability">
+              <Search size={13} /> Live store search
+            </span>
+          )}
+          <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
+            {enabled ? 'Ready' : 'Offline'}
+          </span>
+        </div>
       </div>
 
       <ErrorMessage error={agents.error} />
@@ -357,19 +367,6 @@ export function ShopLook() {
 
   return (
     <div className="agent-page stylist-agent-page">
-      <AgentPageHeader
-        eyebrow={`${stylistPresentation.name.toUpperCase()} · ${stylistPresentation.role.toUpperCase()}`}
-        title="Let's find your kind of look."
-        description="Share an occasion, photo, and total budget. Mira plans the pieces, explains the split, and finds options that work together."
-        actions={
-          searchEnabled ? (
-            <span className="search-capability">
-              <Search size={13} /> Live store search
-            </span>
-          ) : undefined
-        }
-      />
-
       <div className={`agent-workspace ${lookId ? 'has-look-board' : ''}`}>
         <SessionRail
           title="Saved looks"

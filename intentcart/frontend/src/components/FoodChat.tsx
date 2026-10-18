@@ -7,7 +7,6 @@ import { useAgentTurn } from '../lib/agentTurns'
 import { agents as agentProfiles } from '../lib/agents'
 import type { AgentInfo, Conversation, ConversationSummary } from '../lib/conversations'
 import { AgentMessage } from './AgentMessage'
-import { AgentPageHeader } from './AgentPageHeader'
 import { AgentProgress } from './AgentProgress'
 import { ErrorMessage } from './Feedback'
 import { SessionRail } from './SessionRail'
@@ -78,6 +77,10 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
   })
 
   const messages = conversation.data?.messages ?? []
+  const chatTitle =
+    conversation.data?.title && conversation.data.title !== 'New review'
+      ? conversation.data.title
+      : "Let's understand what's in your food."
   const activeText = turn.activeRequest?.text
   const acceptedUserSaved = messages.some(
     (message) =>
@@ -112,26 +115,6 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
 
   return (
     <div className="agent-page food-agent-page">
-      <AgentPageHeader
-        eyebrow={`${foodPresentation.name.toUpperCase()} · ${foodPresentation.role.toUpperCase()}`}
-        title="Decipher your ingredients, together."
-        description="Paste a label or ask about an additive. Nia checks your preferences and explains the evidence in plain language."
-        actions={
-          <div className="agent-capabilities" aria-label="Available capabilities">
-            {searchEnabled && (
-              <span className="search-capability">
-                <Search size={13} /> Search
-              </span>
-            )}
-            {fetchEnabled && (
-              <span className="search-capability">
-                <Globe size={13} /> Evidence check
-              </span>
-            )}
-          </div>
-        }
-      />
-
       <div className="agent-workspace">
         <SessionRail
           title="Food reviews"
@@ -197,22 +180,34 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
         </SessionRail>
 
         <div className="agent-workspace-primary">
-          <section className="panel conversation-panel" aria-label="Nia food guide conversation">
-            <div className="conversation-heading">
+          <section className="panel conversation-panel" aria-labelledby="food-chat-title">
+            <div className="conversation-heading compact-conversation-heading">
               <div>
                 <span className="stylist-avatar food-avatar">
                   <Utensils size={18} />
                 </span>
-                <div>
-                  <h2>
+                <div className="agent-chat-title">
+                  <span className="eyebrow">
                     {foodPresentation.name} · {foodPresentation.role}
-                  </h2>
-                  <span className="muted">Ingredients, preferences and evidence</span>
+                  </span>
+                  <h1 id="food-chat-title">{chatTitle}</h1>
                 </div>
               </div>
-              <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
-                {enabled ? 'Ready' : 'Offline'}
-              </span>
+              <div className="conversation-heading-status">
+                {searchEnabled && (
+                  <span className="search-capability">
+                    <Search size={13} /> Search
+                  </span>
+                )}
+                {fetchEnabled && (
+                  <span className="search-capability">
+                    <Globe size={13} /> Evidence check
+                  </span>
+                )}
+                <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
+                  {enabled ? 'Ready' : 'Offline'}
+                </span>
+              </div>
             </div>
 
             <ErrorMessage error={agents.error} />

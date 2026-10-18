@@ -14,7 +14,7 @@
   display: none;
 }
 .agent-page {
-  height: calc(100dvh - 132px);
+  height: calc(100dvh - 116px);
   min-height: 560px;
   display: flex;
   flex-direction: column;
@@ -178,6 +178,47 @@
 .conversation-heading h2 {
   font-size: 18px;
   letter-spacing: -0.02em;
+}
+.compact-conversation-heading {
+  padding: 12px 18px;
+}
+.compact-conversation-heading > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.compact-conversation-heading .stylist-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+.agent-chat-title {
+  min-width: 0;
+}
+.agent-chat-title .eyebrow {
+  display: block;
+  line-height: 1.25;
+}
+.agent-chat-title h1 {
+  max-width: min(62vw, 700px);
+  margin: 2px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.conversation-heading-status {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.conversation-heading-status .search-capability {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  white-space: nowrap;
 }
 .stylist-avatar {
   display: grid;
@@ -631,7 +672,7 @@
     padding-bottom: 10px;
   }
   .agent-page {
-    height: calc(100dvh - 126px);
+    height: calc(100dvh - 102px);
     min-height: 500px;
   }
   .agent-page-heading {
@@ -647,6 +688,16 @@
   }
   .conversation-heading {
     padding: 13px 15px;
+  }
+  .compact-conversation-heading {
+    padding: 9px 12px;
+  }
+  .agent-chat-title h1 {
+    max-width: 58vw;
+    font-size: 16px;
+  }
+  .compact-conversation-heading .search-capability {
+    display: none;
   }
   .conversation-heading h2 {
     font-size: 16px;
