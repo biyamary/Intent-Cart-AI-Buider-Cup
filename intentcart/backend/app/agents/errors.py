@@ -17,6 +17,7 @@ class AgentFailure:
     detail: str
     reason: str
     retry_after: int | None = None
+    retryable: bool = True
 
 
 class StructuredResponseError(Exception):
@@ -91,6 +92,7 @@ def _quota_failure(error: ClientError) -> AgentFailure:
             "or Google Cloud Console (Vertex AI). "
             "Retrying immediately will not resolve a zero quota.",
             "quota_zero",
+            retryable=False,
         )
 
     quota_ids = [str(item.get("quotaId", "")).lower() for item in violations]
@@ -129,16 +131,17 @@ def _adc_failure() -> AgentFailure:
         "gcloud auth application-default login and set the ADC quota project to "
         "GOOGLE_CLOUD_PROJECT. Verify that the account has access to that project.",
         "provider_auth",
+        retryable=False,
     )
 
 
-def describe_agent_error(error: Exception) -> AgentFailure:
+def describe_agent_error(error: Exception, subject: str = "The assistant") -> AgentFailure:
     if isinstance(error, GoogleAuthError):
         return _adc_failure()
     if isinstance(error, TimeoutError):
         return AgentFailure(
             504,
-            "The stylist took too long to reply. Your conversation is saved; send a follow-up to continue.",
+            f"{subject} took too long to reply. Your conversation is saved; send a follow-up to continue.",
             "timeout",
         )
     if isinstance(error, ClientError) and error.code == 429:
@@ -149,10 +152,11 @@ def describe_agent_error(error: Exception) -> AgentFailure:
             "Gemini could not start this request. Check the server's credentials, project "
             "permissions, enabled API, model access and Google Search support.",
             "provider_configuration",
+            retryable=False,
         )
     return AgentFailure(
         502,
-        "The stylist could not complete that reply. Your conversation is saved; please try again.",
+        f"{subject} could not complete that reply. Your conversation is saved; please try again.",
         "provider_failure",
     )
 

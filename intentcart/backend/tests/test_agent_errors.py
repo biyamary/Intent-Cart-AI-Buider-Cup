@@ -31,6 +31,7 @@ def test_zero_quota_overrides_short_retry_delay(zero):
     failure = describe_agent_error(quota_error(value=zero))
     assert failure.reason == "quota_zero"
     assert failure.retry_after is None
+    assert failure.retryable is False
     assert "billing tier" in failure.detail
     assert "private-" not in repr(failure)
 
@@ -98,3 +99,11 @@ def test_retry_after_header_without_rpc_details():
     response = httpx.Response(429, headers={"Retry-After": "30"})
     failure = describe_agent_error(ClientError(429, {}, response=response))
     assert failure.retry_after == 30
+
+
+def test_conversation_failure_uses_supplied_agent_name_without_internal_detail():
+    failure = describe_agent_error(TimeoutError("private timeout"), "The food companion")
+    assert failure.reason == "timeout"
+    assert failure.retryable is True
+    assert failure.detail.startswith("The food companion took too long")
+    assert "private" not in failure.detail

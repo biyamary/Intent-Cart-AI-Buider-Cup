@@ -1,4 +1,5 @@
 import asyncio
+import time
 from uuid import uuid4
 
 import pytest
@@ -76,6 +77,15 @@ class FakeGemini(BaseLlm):
             )
 
 
+class SlowGemini(FakeGemini):
+    _delay: float = PrivateAttr(default=0.08)
+
+    async def generate_content_async(self, llm_request, stream=False):
+        await asyncio.sleep(self._delay)
+        async for response in super().generate_content_async(llm_request, stream=stream):
+            yield response
+
+
 def settings(**overrides):
     overrides.setdefault("stylist_search_enabled", False)
     return Settings(
@@ -118,6 +128,20 @@ def send(client, session_id, text, request_id=None):
         f"/api/agents/stylist/sessions/{session_id}/messages",
         json={"text": text, "request_id": request_id or str(uuid4())},
     )
+
+
+def wait_for_turn(client, agent_id, session_id, request_id, timeout=2):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = client.get(
+            f"/api/agents/{agent_id}/sessions/{session_id}/turns/{request_id}"
+        )
+        assert response.status_code == 200, response.text
+        turn = response.json()
+        if turn["status"] in {"succeeded", "failed"}:
+            return turn
+        time.sleep(0.01)
+    raise AssertionError("turn did not finish")
 
 
 @pytest.mark.parametrize("chat_client", [True], indirect=True)
@@ -250,6 +274,119 @@ def test_food_chat_agent_session_and_profile_context():
         instruction = str(req.config.system_instruction)
         assert "peanuts" in instruction
         assert "child" in instruction
+
+
+def test_food_has_independent_120_second_turn_timeout():
+    service = ConversationService(settings(), InMemorySessionService())
+    try:
+        assert service.registration("food").timeout_seconds(service.settings) == 120
+        custom = settings(food_timeout_seconds=145)
+        assert service.registration("food").timeout_seconds(custom) == 145
+        assert service.registration("stylist").timeout_seconds(custom) == 120
+    finally:
+        asyncio.run(service.close())
+
+
+def test_accepted_turn_can_be_polled_and_replayed_without_duplicate_call(chat_client):
+    client, _model = chat_client
+    model = SlowGemini()
+    client.app.state.conversations.runner("stylist").agent.model = model
+    session_id = new_session(client)
+    request_id = str(uuid4())
+    url = f"/api/agents/stylist/sessions/{session_id}/turns"
+    payload = {"text": "Mehendi outfit", "request_id": request_id}
+
+    accepted = client.post(url, json=payload)
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json()["request_id"] == request_id
+    assert accepted.json()["status"] == "queued"
+    assert accepted.json()["progress"] == {"stage": "queued", "label": "Waiting to start"}
+
+    replay = client.post(url, json=payload)
+    assert replay.status_code == 202
+    assert replay.json()["request_id"] == request_id
+
+    turn = wait_for_turn(client, "stylist", session_id, request_id)
+    assert turn["status"] == "succeeded"
+    assert turn["progress"]["stage"] == "complete"
+    assert turn["error"] is None
+    assert turn["retry"] is None
+    assert len(model._requests) == 1
+
+    conversation = client.get(f"/api/agents/stylist/sessions/{session_id}").json()
+    assert [message["role"] for message in conversation["messages"]] == [
+        "user",
+        "assistant",
+    ]
+    assert "Private model reasoning" not in str(conversation) + str(turn)
+
+
+def test_accepted_food_failure_has_one_canonical_error_and_retry_metadata():
+    with TestClient(create_app(settings(food_agent_mode="gemini"))) as client:
+        model = SlowGemini()
+        model._failure = RuntimeError("secret error details")
+        client.app.state.conversations.runner("food").agent.model = model
+        session_id = client.post("/api/agents/food/sessions").json()["id"]
+        request_id = str(uuid4())
+        url = f"/api/agents/food/sessions/{session_id}/turns"
+
+        assert (
+            client.post(
+                url, json={"text": "Check this ingredient", "request_id": request_id}
+            ).status_code
+            == 202
+        )
+        turn = wait_for_turn(client, "food", session_id, request_id)
+        assert turn["status"] == "failed"
+        assert turn["error"]["code"] == "provider_failure"
+        assert turn["error"]["message"].startswith("The food companion could not")
+        assert turn["retry"] == {
+            "allowed": True,
+            "after_seconds": None,
+            "use_new_request_id": True,
+        }
+        assert "secret" not in str(turn)
+
+        saved = client.get(f"/api/agents/food/sessions/{session_id}").json()
+        errors = [message for message in saved["messages"] if message["status"] == "error"]
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == request_id
+        assert errors[0]["error"] == turn["error"]
+        assert errors[0]["retry"] == turn["retry"]
+
+        replay = client.post(
+            url, json={"text": "Check this ingredient", "request_id": request_id}
+        )
+        assert replay.status_code == 202
+        assert replay.json()["status"] == "failed"
+        assert len(model._requests) == 1
+
+
+def test_orphaned_accepted_turn_becomes_one_recoverable_failure():
+    async def check():
+        service = ConversationService(settings(), InMemorySessionService())
+        session = await service.create("stylist", "user-a")
+        request_id = uuid4()
+        created_at = time.time()
+        await service._record_progress(
+            "stylist",
+            "user-a",
+            session.id,
+            str(request_id),
+            "running",
+            "understanding",
+            created_at,
+        )
+
+        first = await service.get_turn("stylist", "user-a", session.id, request_id)
+        second = await service.get_turn("stylist", "user-a", session.id, request_id)
+        assert first.status == second.status == "failed"
+        assert first.error and first.error.code == "interrupted"
+        conversation = await service.get("stylist", "user-a", session.id)
+        assert len([message for message in conversation.messages if message.status == "error"]) == 1
+        await service.close()
+
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize(

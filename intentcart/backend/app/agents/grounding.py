@@ -4,7 +4,13 @@ from urllib.parse import urlsplit
 
 from google.adk.events import Event
 
-from app.agents.conversation_schemas import ChatMessage, Citation, Source
+from app.agents.conversation_schemas import (
+    ChatMessage,
+    Citation,
+    RetryAdvice,
+    Source,
+    TurnError,
+)
 
 
 def http_url(url: str | None) -> bool:
@@ -18,8 +24,21 @@ def http_url(url: str | None) -> bool:
 def public_message(event: Event, root_name: str) -> ChatMessage | None:
     error = event.actions.state_delta.get("chat:error")
     if event.author == "system" and error:
+        failure = event.actions.state_delta.get("chat:failure")
+        request_id = event.actions.state_delta.get("chat:request_id")
         return ChatMessage(
-            id=event.id, role="assistant", text=error, created_at=event.timestamp, status="error"
+            id=event.id,
+            role="assistant",
+            text=error,
+            created_at=event.timestamp,
+            status="error",
+            request_id=request_id,
+            error=TurnError.model_validate(failure.get("error"))
+            if isinstance(failure, dict) and isinstance(failure.get("error"), dict)
+            else None,
+            retry=RetryAdvice.model_validate(failure.get("retry"))
+            if isinstance(failure, dict) and isinstance(failure.get("retry"), dict)
+            else None,
         )
     if event.author != "user" and (event.author != root_name or not event.is_final_response()):
         return None

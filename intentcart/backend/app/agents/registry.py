@@ -26,6 +26,7 @@ class AgentRegistration:
     timeout_seconds: Callable[[Settings], int] = lambda settings: settings.agent_timeout_seconds
     accepts_images: bool = False
     default_title: str = "New conversation"
+    failure_subject: str = "The assistant"
 
     @property
     def app_name(self) -> str:
@@ -58,6 +59,7 @@ AGENTS = {
         timeout_seconds=lambda settings: settings.stylist_timeout_seconds,
         accepts_images=True,
         default_title="New look",
+        failure_subject="The stylist",
     ),
     "food": AgentRegistration(
         key="food",
@@ -76,6 +78,8 @@ AGENTS = {
             "diet": profile.diet,
             "food_countries": profile.food_countries,
         },
+        timeout_seconds=lambda settings: settings.food_timeout_seconds,
         default_title="New review",
+        failure_subject="The food companion",
     ),
 }
