@@ -176,8 +176,10 @@ CategoryName = Annotated[
 ]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)]
 SmallBusinessPreference = Literal["off", "prefer", "only"]
+RetailerPolicy = Literal["popular_first", "balanced", "independent_first", "independent_only"]
 SellerLabel = Literal["verified_small_business", "independent", "marketplace", "brand", "unknown"]
 DiscoveryStatus = Literal["idle", "searching", "ready", "no_results", "failed"]
+SurveyStatus = Literal["pending", "surveying", "ready", "no_verified_prices", "not_needed"]
 MAX_CHECKLIST_ITEMS = 10
 
 
@@ -193,7 +195,24 @@ class LookBrief(Contract):
     platforms: list[Text] = Field(default_factory=list, max_length=12)
     delivery_city: ShortText = ""
     delivery_pin: str = Field(default="", pattern=r"^(\d{6})?$")
-    small_business: SmallBusinessPreference = "prefer"
+    retailer_policy: RetailerPolicy = "popular_first"
+    # Kept for persisted records and older clients. New clients should use
+    # retailer_policy; it distinguishes popular-store ranking from seller size.
+    small_business: SmallBusinessPreference = "off"
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_retailer_preference(cls, value):
+        if isinstance(value, dict) and "retailer_policy" not in value:
+            legacy = value.get("small_business")
+            if legacy:
+                value = dict(value)
+                value["retailer_policy"] = {
+                    "off": "popular_first",
+                    "prefer": "independent_first",
+                    "only": "independent_only",
+                }.get(legacy, "popular_first")
+        return value
 
 
 class PieceSpec(Contract):
@@ -233,6 +252,25 @@ class CatalogProduct(Contract):
     style_score: int | None = Field(default=None, ge=0, le=100)
 
 
+class PriceBand(Contract):
+    low_minor: int = Field(default=0, ge=0)
+    typical_minor: int = Field(default=0, ge=0)
+    high_minor: int = Field(default=0, ge=0)
+    sample_count: int = Field(default=0, ge=0)
+    source: Literal["fallback", "market", "selected"] = "fallback"
+
+
+class BudgetPlan(Contract):
+    revision: int = Field(default=0, ge=0)
+    status: Literal["estimating", "surveying", "ready", "infeasible"] = "estimating"
+    feasible: bool | None = None
+    minimum_complete_total_minor: int = Field(default=0, ge=0)
+    planned_total_minor: int = Field(default=0, ge=0)
+    verified_item_count: int = Field(default=0, ge=0)
+    open_item_count: int = Field(default=0, ge=0)
+    note: str = Field(default="", max_length=500)
+
+
 class Boutique(Contract):
     name: str
     url: str | None = None
@@ -246,7 +284,12 @@ class ChecklistItem(Contract):
     target: str = Field(default="", max_length=300)
     hints: list[str] = Field(default_factory=list, max_length=8)
     status: Literal["open", "locked", "owned", "removed"] = "open"
+    budget_role: str = Field(default="accessory", max_length=40)
+    price_band: PriceBand = Field(default_factory=PriceBand)
+    planned_budget_minor: int = Field(default=0, ge=0)
     budget_cap_minor: int = 0
+    reserved_product_id: str | None = None
+    survey_status: SurveyStatus = "pending"
     chosen_product: CatalogProduct | None = None
     candidates: list[CatalogProduct] = Field(default_factory=list)
     # Verified live products for this item; `candidates` is the budget-filtered shortlist.
@@ -296,6 +339,31 @@ class Alternatives(Contract):
     max_price_minor: int | None = Field(default=None, gt=0, le=100_000_000, strict=True)
 
 
+class LookBriefPatch(Contract):
+    occasion: Text | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    total_budget_minor: int | None = Field(default=None, gt=0, le=100_000_000, strict=True)
+    event_date: str | None = Field(default=None, max_length=40)
+    sizes: ShortText | None = None
+    colours: list[Text] | None = Field(default=None, max_length=12)
+    avoid_colours: list[Text] | None = Field(default=None, max_length=12)
+    platforms: list[Text] | None = Field(default=None, max_length=12)
+    delivery_city: ShortText | None = None
+    delivery_pin: str | None = Field(default=None, pattern=r"^(\d{6})?$")
+    retailer_policy: RetailerPolicy | None = None
+    small_business: SmallBusinessPreference | None = None
+
+
+class RefineLook(Contract):
+    kind: Literal[
+        "cheaper", "more_formal", "more_casual", "change_colour",
+        "popular_stores_only", "custom",
+    ]
+    request: str = Field(default="", max_length=500)
+    colour: str = Field(default="", max_length=80)
+    preserve_selected: bool = True
+
+
 class InspirationItem(Contract):
     id: str = Field(default_factory=new_id)
     kind: Literal["pinterest", "web"]
@@ -329,5 +397,9 @@ class Look(Contract):
     references: list[str] = Field(default_factory=list, max_length=6)
     inspiration: list[InspirationItem] = Field(default_factory=list, max_length=12)
     concepts: list[ConceptImage] = Field(default_factory=list, max_length=12)
+    budget_plan: BudgetPlan = Field(default_factory=BudgetPlan)
+    # Changes to shopping intent bump this separately from persistence revision.
+    # Discovery jobs capture it so late results cannot overwrite a newer plan.
+    plan_revision: int = 0
     revision: int = 0
     updated_at: str = Field(default_factory=now)

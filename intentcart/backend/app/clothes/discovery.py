@@ -32,7 +32,12 @@ from app.agents.privacy import adk_app
 from app.agents.schemas import RankResult
 from app.clothes.agent_calls import Source, collect_grounding, parse_json, urls_in
 from app.clothes.pages import Fetcher, PageFacts, fetch_public, host_of, read_product
-from app.clothes.sellers import classify, is_store_url, small_business_domains
+from app.clothes.sellers import (
+    classify,
+    is_store_url,
+    popular_retailer_domains,
+    small_business_domains,
+)
 from app.clothes.service import MIN_FIT, LookError, LookService, product_id
 from app.config import Settings
 from app.schemas import CatalogProduct, ChecklistItem, Look
@@ -168,7 +173,10 @@ class Discovery:
         job = uuid4().hex
         for item_id in ids:
             self._owners[(look_id, item_id)] = job
-        self._spawn(self._run(uid, look_id, ids, "search", request, max_price_minor, job))
+        self._spawn(self._run(
+            uid, look_id, ids, "search", request, max_price_minor,
+            job, look.plan_revision,
+        ))
         return ids
 
     def owns(self, look_id: str, item_id: str, job: str | None) -> bool:
@@ -181,7 +189,9 @@ class Discovery:
         look = await self.looks.get(uid, look_id)
         ids = [i.id for i in look.items if i.status == "open" and len(i.pool) > 1]
         if ids:
-            self._spawn(self._run(uid, look_id, ids, "rank", "", None))
+            self._spawn(self._run(
+                uid, look_id, ids, "rank", "", None, None, look.plan_revision
+            ))
 
     async def wait_idle(self) -> None:
         """Test/shutdown helper: wait for running jobs."""
@@ -199,27 +209,38 @@ class Discovery:
         task.add_done_callback(self._tasks.discard)
 
     # ------------------------------------------------------------------ job
-    async def _run(self, uid, look_id, item_ids, mode, request, max_price_minor, job=None) -> None:
+    async def _run(
+        self, uid, look_id, item_ids, mode, request, max_price_minor,
+        job=None, plan_revision: int | None = None,
+    ) -> None:
         try:
             async with asyncio.timeout(self.settings.discovery_timeout_seconds):
                 look = await self.looks.get(uid, look_id)
+                if plan_revision is not None and look.plan_revision != plan_revision:
+                    return
                 specs = [
                     self._spec(look, item, mode, request, max_price_minor)
                     for item in look.items
                     if item.id in item_ids and item.status == "open"
                 ]
                 if specs:
-                    await self._execute(self._workflow(uid, look_id, specs, job), uid)
+                    await self._execute(
+                        self._workflow(uid, look_id, specs, job, plan_revision), uid
+                    )
         except Exception as error:  # noqa: BLE001 -- background job; never log payloads
             logger.warning("Discovery job failed: mode=%s error_type=%s", mode, type(error).__name__)
         finally:
             if mode == "search":
-                await self._fail_unfinished(uid, look_id, item_ids, job)
+                await self._fail_unfinished(
+                    uid, look_id, item_ids, job, plan_revision
+                )
                 for item_id in item_ids:
                     if self._owners.get((look_id, item_id)) == job:
                         del self._owners[(look_id, item_id)]
 
-    async def _fail_unfinished(self, uid, look_id, item_ids, job) -> None:
+    async def _fail_unfinished(
+        self, uid, look_id, item_ids, job, plan_revision: int | None = None
+    ) -> None:
         try:
             look = await self.looks.get(uid, look_id)
         except LookError:
@@ -232,6 +253,7 @@ class Discovery:
                 await self.looks.apply_discovery(
                     uid, look_id, item.id, status="failed",
                     note="The search did not finish. Ask the stylist or press retry.",
+                    expected_plan_revision=plan_revision,
                 )
 
     def _spec(self, look: Look, item: ChecklistItem, mode, request, max_price_minor) -> dict:
@@ -246,8 +268,13 @@ class Discovery:
             "hints": item.hints,
             "request": request,
             "cap_minor": cap,
+            "search_cap_minor": (
+                min(look.remaining_budget_minor, max_price_minor)
+                if max_price_minor else
+                look.remaining_budget_minor if mode == "search" and not item.pool else cap
+            ),
             "max_price_minor": max_price_minor,
-            "preference": look.brief.small_business,
+            "retailer_policy": look.brief.retailer_policy,
             "brief": brief_context(look),
             "locked": locked_pieces(look),
             "pool": [p.model_dump(mode="json") for p in item.pool] if mode == "rank" else [],
@@ -302,7 +329,12 @@ class Discovery:
         )
 
     def _workflow(
-        self, uid: str, look_id: str, specs: list[dict], job: str | None = None
+        self,
+        uid: str,
+        look_id: str,
+        specs: list[dict],
+        job: str | None = None,
+        plan_revision: int | None = None,
     ) -> Workflow:
         sources = {spec["item_id"]: [] for spec in specs}
         searchers = {
@@ -358,11 +390,15 @@ class Discovery:
                     await looks.apply_discovery(
                         uid, look_id, item_id, status="failed",
                         note="Search for this item failed. Try again in a moment.",
+                        expected_plan_revision=plan_revision,
                     )
                 return {"item_id": item_id, "found": 0}
 
             if spec["mode"] == "rank":
-                await looks.set_scores(uid, look_id, item_id, scores)
+                await looks.set_scores(
+                    uid, look_id, item_id, scores,
+                    expected_plan_revision=plan_revision,
+                )
                 return {"item_id": item_id, "found": len(products)}
 
             if not self.owns(look_id, item_id, job):
@@ -393,7 +429,8 @@ class Discovery:
                 if misses := found.get("misses") if spec["mode"] == "search" else None:
                     note += " " + miss_summary(misses)
             await looks.apply_discovery(
-                uid, look_id, item_id, status=status, pool=pool, note=note, replace=True
+                uid, look_id, item_id, status=status, pool=pool, note=note, replace=True,
+                expected_plan_revision=plan_revision,
             )
             return {"item_id": item_id, "found": len(pool)}
 
@@ -411,9 +448,15 @@ class Discovery:
             "item": {"category": spec["category"], "target": spec["target"], "hints": spec["hints"]},
             "latest_request": spec["request"],
             "brief": spec["brief"],
-            "price_ceiling_inr": rupees(spec["cap_minor"]),
-            "small_business_preference": spec["preference"],
-            "favour_domains": small_business_domains() if spec["preference"] != "off" else [],
+            "price_ceiling_inr": rupees(spec["search_cap_minor"]),
+            "planned_item_budget_inr": rupees(spec["cap_minor"]),
+            "retailer_policy": spec["retailer_policy"],
+            "preferred_retailers": spec["brief"].get("platforms", []),
+            "favour_domains": (
+                small_business_domains()
+                if spec["retailer_policy"] in {"independent_first", "independent_only"}
+                else popular_retailer_domains()
+            ),
         }
         text = await ctx.run_node(searcher, json.dumps(payload), use_sub_branch=True)
         data = parse_json(text)

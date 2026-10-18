@@ -18,6 +18,8 @@ from app.schemas import (
     ItemAction,
     Look,
     LookBrief,
+    LookBriefPatch,
+    RefineLook,
 )
 from app.tools.budget import WEIGHTS
 
@@ -85,6 +87,73 @@ async def get_look(
     return await run(service.get(uid, look_id))
 
 
+@router.patch("/looks/{look_id}/brief", response_model=Look)
+async def update_brief(
+    look_id: str,
+    body: LookBriefPatch,
+    uid: str = Depends(current_user),
+    service: LookService = Depends(looks),
+    jobs: Discovery = Depends(discovery),
+):
+    changes = body.model_dump(exclude_none=True)
+    look = await run(service.update_brief(uid, look_id, changes))
+    if look.mode == "agent" and look.status == "shopping":
+        search_fields = {
+            "description", "sizes", "colours", "avoid_colours", "platforms",
+            "retailer_policy", "small_business",
+        }
+        ids = (
+            [item.id for item in look.items if item.status == "open"]
+            if search_fields.intersection(changes)
+            else _uncovered_item_ids(look)
+        )
+        if ids:
+            await jobs.start(uid, look.id, ids, request="Preferences updated")
+            look = await service.get(uid, look.id)
+    return look
+
+
+@router.post("/looks/{look_id}/replan", response_model=Look)
+async def replan_look(
+    look_id: str,
+    uid: str = Depends(current_user),
+    service: LookService = Depends(looks),
+    jobs: Discovery = Depends(discovery),
+):
+    look = await run(service.replan(uid, look_id))
+    if look.mode == "agent" and look.status == "shopping":
+        ids = _uncovered_item_ids(look)
+        if ids:
+            await jobs.start(uid, look.id, ids)
+            look = await service.get(uid, look.id)
+    return look
+
+
+@router.post("/looks/{look_id}/refine", response_model=Look)
+async def refine_look(
+    look_id: str,
+    body: RefineLook,
+    uid: str = Depends(current_user),
+    service: LookService = Depends(looks),
+    jobs: Discovery = Depends(discovery),
+):
+    look = await run(service.refine(
+        uid,
+        look_id,
+        kind=body.kind,
+        request=body.request,
+        colour=body.colour,
+        preserve_selected=body.preserve_selected,
+    ))
+    if look.mode == "agent" and look.status == "shopping":
+        ids = [item.id for item in look.items if item.status == "open"]
+        if ids:
+            request_text = body.request or body.kind.replace("_", " ")
+            await jobs.start(uid, look.id, ids, request=request_text)
+            look = await service.get(uid, look.id)
+    return look
+
+
 @router.post("/looks/{look_id}/checklist", response_model=Look)
 async def confirm_checklist(
     look_id: str,
@@ -110,7 +179,9 @@ async def add_item(
 ):
     look = await run(service.add_item(uid, look_id, body.category, body.target))
     if look.mode == "agent" and look.status == "shopping":
-        await jobs.start(uid, look.id, [find_item(look, body.category).id])
+        new_id = find_item(look, body.category).id
+        ids = list(dict.fromkeys([new_id, *_uncovered_item_ids(look)]))
+        await jobs.start(uid, look.id, ids)
         look = await service.get(uid, look.id)
     return look
 
@@ -133,6 +204,10 @@ async def change_item(
             if len(item.candidates) < 2 and item.discovery != "searching":
                 await jobs.start(uid, look.id, [item.id])
                 look = await service.get(uid, look.id)
+        missing = _uncovered_item_ids(look)
+        if missing:
+            await jobs.start(uid, look.id, missing)
+            look = await service.get(uid, look.id)
     return look
 
 
@@ -212,3 +287,11 @@ async def _open_agent_item(look: Look, item_id: str):
     if item.status != "open":
         raise LookError(409, "Swap or reopen this item first.")
     return item
+
+
+def _uncovered_item_ids(look: Look) -> list[str]:
+    return [
+        item.id
+        for item in look.items
+        if item.status == "open" and not item.pool and item.discovery != "searching"
+    ]

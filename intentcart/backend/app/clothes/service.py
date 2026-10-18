@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 from pydantic import ValidationError
 
-from app.clothes.sellers import is_small_business
+from app.clothes.sellers import is_small_business, retailer_priority
 from app.memory.store import Store
 from app.schemas import (
     MAX_CHECKLIST_ITEMS,
@@ -45,7 +45,9 @@ def product_id(url: str) -> str:
     return "p_" + hashlib.sha256(url.encode()).hexdigest()[:12]
 
 
-def shortlist(item: ChecklistItem, preference: str) -> list[CatalogProduct]:
+def shortlist(
+    item: ChecklistItem, policy: str = "popular_first", preferred_platforms: list[str] | None = None
+) -> list[CatalogProduct]:
     """Deterministic shortlist: budget, stock and rejections first, then style score."""
     eligible = [
         p
@@ -57,24 +59,28 @@ def shortlist(item: ChecklistItem, preference: str) -> list[CatalogProduct]:
     ]
     user_added = [p for p in eligible if p.source == "user"]
     eligible = [p for p in eligible if p.source != "user"]
-    if preference == "only":
+    # Accept the old values for callers/persisted clients while new APIs use the
+    # clearer retailer policy names.
+    policy = {
+        "off": "popular_first",
+        "prefer": "independent_first",
+        "only": "independent_only",
+    }.get(policy, policy)
+    if policy == "independent_only":
         eligible = [p for p in eligible if is_small_business(p.seller_label)]
 
     def rank(product: CatalogProduct):
-        boost = (
-            SMALL_BUSINESS_BOOST
-            if preference == "prefer" and is_small_business(product.seller_label)
-            else 0
-        )
-        return (-((product.style_score or 50) + boost), product.price_minor)
+        fit = -(product.style_score or 50)
+        store = retailer_priority(product.url, product.seller_label, preferred_platforms)
+        if policy == "popular_first":
+            return (store, fit, product.price_minor)
+        if policy == "independent_first":
+            independent = 0 if is_small_business(product.seller_label) else 1
+            return (independent, fit, store, product.price_minor)
+        return (fit, store, product.price_minor)
 
     ranked = sorted(eligible, key=rank)
     top = ranked[: max(0, SHORTLIST_SIZE - len(user_added))]
-    if preference != "off" and top and not any(is_small_business(p.seller_label) for p in top):
-        small = next((p for p in ranked if is_small_business(p.seller_label)), None)
-        if small:
-            # Reserve one slot for an independent seller when one fits the budget.
-            top[-1] = small
     return user_added + top
 
 
@@ -92,7 +98,9 @@ def refresh(look: Look) -> Look:
                 if p.category == item.category and p.price_minor <= item.budget_cap_minor
             ]
         else:
-            item.candidates = shortlist(item, look.brief.small_business)
+            item.candidates = shortlist(
+                item, look.brief.retailer_policy, look.brief.platforms
+            )
     return look
 
 
@@ -118,11 +126,25 @@ class LookService:
         await self.store.put(uid, "looks", look.id, look.model_dump(mode="json"))
         return look
 
-    async def mutate(self, uid: str, look_id: str, change: Callable[[Look], None], event="") -> Look:
+    async def mutate(
+        self,
+        uid: str,
+        look_id: str,
+        change: Callable[[Look], None],
+        event="",
+        *,
+        plan_change: bool = False,
+    ) -> Look:
         """Serialised read-modify-write; `change` raises LookError to reject."""
         async with self._locks[look_id]:
             look = await self.get(uid, look_id)
             change(look)
+            if plan_change:
+                look.plan_revision += 1
+                for item in look.items:
+                    if item.status == "open" and item.discovery == "searching":
+                        item.discovery = "idle"
+                        item.discovery_note = "The plan changed; verified results will be reused."
             try:
                 refresh(look)
             except ValueError as error:
@@ -146,6 +168,12 @@ class LookService:
         def change(look: Look):
             data = look.brief.model_dump()
             data.update({k: v for k, v in changes.items() if v is not None})
+            if changes.get("retailer_policy") is None and changes.get("small_business") is not None:
+                data["retailer_policy"] = {
+                    "off": "popular_first",
+                    "prefer": "independent_first",
+                    "only": "independent_only",
+                }[changes["small_business"]]
             try:
                 brief = LookBrief.model_validate(data)
             except ValidationError as error:
@@ -155,7 +183,57 @@ class LookService:
                 raise LookError(422, "The new budget is below what is already selected.")
             look.brief = brief
 
-        return await self.mutate(uid, look_id, change, "brief")
+        return await self.mutate(uid, look_id, change, "brief", plan_change=True)
+
+    async def replan(self, uid: str, look_id: str) -> Look:
+        """Create a new plan revision while reusing every verified product pool."""
+        return await self.mutate(
+            uid, look_id, lambda look: None, "replanned", plan_change=True
+        )
+
+    async def refine(
+        self,
+        uid: str,
+        look_id: str,
+        *,
+        kind: str,
+        request: str = "",
+        colour: str = "",
+        preserve_selected: bool = True,
+    ) -> Look:
+        directions = {
+            "cheaper": "Find a cheaper version of this look.",
+            "more_formal": "Make the look more formal.",
+            "more_casual": "Make the look more casual.",
+            "change_colour": f"Use {colour}." if colour else "Change the colour palette.",
+            "popular_stores_only": "Prefer well-known retailers.",
+            "custom": request,
+        }
+        if kind not in directions:
+            raise LookError(422, "Choose a supported look refinement.")
+
+        def change(look: Look):
+            direction = request or directions[kind]
+            if direction:
+                look.brief.description = " ".join(
+                    part for part in (look.brief.description, direction) if part
+                )[-2000:]
+            if kind == "change_colour" and colour:
+                look.brief.colours = [colour]
+            if kind == "popular_stores_only":
+                look.brief.retailer_policy = "popular_first"
+                look.brief.small_business = "off"
+            for item in look.items:
+                if item.status == "open":
+                    item.hints = [*item.hints, direction][-8:]
+                elif item.status == "locked" and not preserve_selected:
+                    item.status = "open"
+                    item.chosen_product = None
+                    item.hints = [*item.hints, direction][-8:]
+            if look.status == "assembled":
+                look.status = "shopping"
+
+        return await self.mutate(uid, look_id, change, "refined", plan_change=True)
 
     # ------------------------------------------------------------------ checklist
     async def propose_checklist(self, uid: str, look_id: str, pieces: list[PieceSpec]) -> Look:
@@ -171,7 +249,7 @@ class LookService:
             ]
             look.status = "awaiting_checklist"
 
-        return await self.mutate(uid, look_id, change, "checklist_proposed")
+        return await self.mutate(uid, look_id, change, "checklist_proposed", plan_change=True)
 
     async def confirm_checklist(self, uid: str, look_id: str, choices: list[ChecklistChoice]) -> Look:
         def change(look: Look):
@@ -189,7 +267,7 @@ class LookService:
             ]
             look.status = "shopping"
 
-        return await self.mutate(uid, look_id, change, "checklist_confirmed")
+        return await self.mutate(uid, look_id, change, "checklist_confirmed", plan_change=True)
 
     async def add_item(self, uid: str, look_id: str, category: str, target: str = "") -> Look:
         def change(look: Look):
@@ -205,7 +283,7 @@ class LookService:
             if look.status == "assembled":
                 look.status = "shopping"
 
-        return await self.mutate(uid, look_id, change, "item_added")
+        return await self.mutate(uid, look_id, change, "item_added", plan_change=True)
 
     # ------------------------------------------------------------------ item actions
     async def item_action(
@@ -239,7 +317,7 @@ class LookService:
             if look.status == "assembled" or action != "reject":
                 look.status = "shopping"
 
-        return await self.mutate(uid, look_id, change, f"item_{action}")
+        return await self.mutate(uid, look_id, change, f"item_{action}", plan_change=True)
 
     async def apply_discovery(
         self,
@@ -251,8 +329,11 @@ class LookService:
         pool: list[CatalogProduct] | None = None,
         note: str = "",
         replace: bool = False,
+        expected_plan_revision: int | None = None,
     ) -> Look:
         def change(look: Look):
+            if expected_plan_revision is not None and look.plan_revision != expected_plan_revision:
+                return
             item = next((i for i in look.items if i.id == item_id), None)
             if item is None:
                 return  # removed while discovery was running
@@ -268,8 +349,17 @@ class LookService:
 
         return await self.mutate(uid, look_id, change, f"discovery_{status}")
 
-    async def set_scores(self, uid: str, look_id: str, item_id: str, scores: dict[str, tuple[int, str]]):
+    async def set_scores(
+        self,
+        uid: str,
+        look_id: str,
+        item_id: str,
+        scores: dict[str, tuple[int, str]],
+        expected_plan_revision: int | None = None,
+    ):
         def change(look: Look):
+            if expected_plan_revision is not None and look.plan_revision != expected_plan_revision:
+                return
             item = next((i for i in look.items if i.id == item_id), None)
             if item is None:
                 return
@@ -287,7 +377,7 @@ class LookService:
             item.pool = [product] + [p for p in item.pool if p.id != product.id][: POOL_SIZE - 1]
             item.rejected_ids = [i for i in item.rejected_ids if i != product.id]
 
-        return await self.mutate(uid, look_id, change, "user_product")
+        return await self.mutate(uid, look_id, change, "user_product", plan_change=True)
 
     async def assemble(self, uid: str, look_id: str, styling_note: str | None = None) -> Look:
         def change(look: Look):

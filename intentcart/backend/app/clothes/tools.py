@@ -73,6 +73,18 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
         entry = {"category": item.category, "status": item.status, "target": item.target}
         if item.status == "open":
             entry["budget_cap"] = inr(item.budget_cap_minor)
+            entry["budget_role"] = item.budget_role
+            entry["planned_budget"] = inr(item.planned_budget_minor)
+            entry["price_range"] = {
+                "low": inr(item.price_band.low_minor),
+                "typical": inr(item.price_band.typical_minor),
+                "high": inr(item.price_band.high_minor),
+                "sample_count": item.price_band.sample_count,
+                "source": item.price_band.source,
+            }
+            entry["survey"] = item.survey_status
+            if item.reserved_product_id:
+                entry["completion_option_reserved"] = True
             entry["search"] = item.discovery
             if item.discovery_note:
                 entry["search_note"] = item.discovery_note
@@ -90,6 +102,15 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
         "budget": inr(brief.total_budget_minor),
         "spent": inr(look.total_spent_minor),
         "remaining": inr(look.remaining_budget_minor),
+        "budget_plan": {
+            "status": look.budget_plan.status,
+            "feasible": look.budget_plan.feasible,
+            "minimum_complete_total": inr(look.budget_plan.minimum_complete_total_minor),
+            "verified_items": look.budget_plan.verified_item_count,
+            "open_items": look.budget_plan.open_item_count,
+            "note": look.budget_plan.note,
+            "revision": look.budget_plan.revision,
+        },
         "preferences": {
             k: v
             for k, v in {
@@ -99,6 +120,7 @@ def snapshot(look: Look, *, candidates: bool = True) -> dict:
                 "avoid_colours": brief.avoid_colours,
                 "platforms": brief.platforms,
                 "delivery": brief.delivery_city or brief.delivery_pin,
+                "retailer_policy": brief.retailer_policy,
                 "small_business": brief.small_business,
             }.items()
             if v
@@ -156,6 +178,16 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             raise LookError(409, "No look yet: call save_brief with the occasion and budget first.")
         return await looks.get(tool_context.user_id, look_id)
 
+    async def restart_uncovered(uid: str, look: Look) -> Look:
+        ids = [
+            item.id for item in look.items
+            if item.status == "open" and not item.pool and item.discovery != "searching"
+        ]
+        if ids:
+            await discovery.start(uid, look.id, ids)
+            return await looks.get(uid, look.id)
+        return look
+
     # ------------------------------------------------------------------ step 1–2
     @tool_errors
     async def save_brief(
@@ -170,6 +202,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         platforms: list[str] | None = None,
         delivery_city: str | None = None,
         delivery_pin: str | None = None,
+        retailer_policy: str | None = None,
         small_business: str | None = None,
     ) -> dict:
         """Create or update the look brief on the user's look board.
@@ -189,7 +222,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             platforms: Preferred shops or platforms.
             delivery_city: City for delivery or local shopping.
             delivery_pin: 6-digit Indian PIN code.
-            small_business: "prefer" (default), "only" or "off".
+            retailer_policy: "popular_first" (default), "balanced",
+                "independent_first" or "independent_only".
+            small_business: Deprecated compatibility value: "prefer", "only" or "off".
         """
         changes = {
             "occasion": occasion,
@@ -201,6 +236,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             "platforms": platforms,
             "delivery_city": delivery_city,
             "delivery_pin": delivery_pin,
+            "retailer_policy": retailer_policy,
             "small_business": small_business,
             "total_budget_minor": total_budget_inr * 100 if total_budget_inr else None,
         }
@@ -208,6 +244,22 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         uid = tool_context.user_id
         if look_id:
             look = await looks.update_brief(uid, look_id, changes)
+            if look.status == "shopping":
+                search_changed = any(
+                    changes.get(key) is not None
+                    for key in (
+                        "description", "sizes", "colours", "avoid_colours",
+                        "platforms", "retailer_policy", "small_business",
+                    )
+                )
+                ids = [
+                    item.id for item in look.items
+                    if item.status == "open"
+                    and (search_changed or (not item.pool and item.discovery != "searching"))
+                ]
+                if ids:
+                    await discovery.start(uid, look.id, ids, request="Preferences updated")
+                    look = await looks.get(uid, look.id)
         else:
             if not occasion or not total_budget_inr:
                 return {"error": "Both occasion and total_budget_inr are needed to start a look."}
@@ -295,7 +347,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
                     raise LookError(404, f"'{key}' is not on the checklist.")
                 existing.status = {"remove": "removed", "own": "owned", "restore": "open"}[action]
 
-            look = await looks.mutate(uid, look.id, change, "checklist_edit")
+            look = await looks.mutate(
+                uid, look.id, change, "checklist_edit", plan_change=True
+            )
         elif action == "add":
             look = await looks.add_item(uid, look.id, key, target)
             await discovery.start(uid, look.id, [find_item(look, key).id])
@@ -305,6 +359,9 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             look = await looks.item_action(uid, look.id, find_item(look, key).id, mapped)
             if mapped == "reopen":
                 await discovery.start(uid, look.id, [find_item(look, key).id])
+                look = await looks.get(uid, look.id)
+        if look.status == "shopping":
+            look = await restart_uncovered(uid, look)
         return {"updated": True, "look": snapshot(look, candidates=False)}
 
     @tool_errors
@@ -373,11 +430,14 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
             target = find_item(saved, item.id)
             target.hints = [*target.hints, request][-4:]
 
-        await looks.mutate(tool_context.user_id, look.id, remember, "hint")
+        look = await looks.mutate(
+            tool_context.user_id, look.id, remember, "hint", plan_change=True
+        )
         started = await discovery.start(
             tool_context.user_id, look.id, [item.id], request=request,
             max_price_minor=max_price_inr * 100 if max_price_inr else None,
         )
+        await restart_uncovered(tool_context.user_id, await looks.get(tool_context.user_id, look.id))
         return {"searching": bool(started), "note": "New options will appear on the board shortly."}
 
     @tool_errors
@@ -394,6 +454,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         item = find_item(look, category)
         look = await looks.item_action(tool_context.user_id, look.id, item.id, "lock", product_id)
         await discovery.rescore(tool_context.user_id, look.id)
+        look = await restart_uncovered(tool_context.user_id, look)
         return {"selected": True, "look": snapshot(look, candidates=False)}
 
     @tool_errors
@@ -414,7 +475,50 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         refreshed = find_item(look, item.id)
         if action in {"swap", "reopen", "reject"} and len(refreshed.candidates) < 2:
             await discovery.start(tool_context.user_id, look.id, [item.id])
+            look = await looks.get(tool_context.user_id, look.id)
+        look = await restart_uncovered(tool_context.user_id, look)
         return {"changed": True, "look": snapshot(look)}
+
+    @tool_errors
+    async def refine_look(
+        tool_context: ToolContext,
+        kind: str,
+        request: str = "",
+        colour: str = "",
+        preserve_selected: bool = True,
+    ) -> dict:
+        """Update the whole look after results are shown and search again.
+
+        Args:
+            kind: "cheaper", "more_formal", "more_casual", "change_colour",
+                "popular_stores_only", or "custom".
+            request: The user's instructions when kind is "custom", or extra detail.
+            colour: New colour when kind is "change_colour".
+            preserve_selected: Keep selected pieces by default. Set false only when
+                the user asks to redo the entire look.
+        """
+        look = await current(tool_context)
+        look = await looks.refine(
+            tool_context.user_id,
+            look.id,
+            kind=kind,
+            request=request,
+            colour=colour,
+            preserve_selected=preserve_selected,
+        )
+        ids = [item.id for item in look.items if item.status == "open"]
+        started = await discovery.start(
+            tool_context.user_id,
+            look.id,
+            ids,
+            request=request or kind.replace("_", " "),
+        ) if ids else []
+        return {
+            "updated": True,
+            "searching": len(started),
+            "preserved_selected": preserve_selected,
+            "look": snapshot(await looks.get(tool_context.user_id, look.id), candidates=False),
+        }
 
     @tool_errors
     async def add_product_link(
@@ -434,6 +538,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
         item = find_item(look, category)
         product = await verify_link(item.category, url, price_inr * 100 if price_inr else None)
         look = await looks.add_user_product(tool_context.user_id, look.id, item.id, product)
+        await restart_uncovered(tool_context.user_id, look)
         return {"added": product_line(product), "price_from": product.price_source}
 
     @tool_errors
@@ -547,7 +652,7 @@ def build_stylist_tools(services: ShopServices) -> list[FunctionTool]:
 
     functions = [
         save_brief, analyze_reference, propose_checklist, update_checklist, start_shopping,
-        find_products, find_alternatives, select_product, change_item, add_product_link,
+        find_products, find_alternatives, select_product, change_item, refine_look, add_product_link,
         get_look, find_inspiration, visualize_look, finish_look,
     ]
     if settings.stylist_maps_enabled:
