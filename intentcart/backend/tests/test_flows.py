@@ -9,7 +9,7 @@ from app.agents.schemas import Explanation
 from app.auth import current_user
 from app.config import Settings
 from app.memory.store import MemoryStore
-from app.schemas import ChecklistItem, Look, LookBrief
+from app.schemas import CatalogProduct, ChecklistItem, Look, LookBrief
 from app.tools.budget import allocate_budget
 from app.tools.food import split_label
 
@@ -138,6 +138,24 @@ def test_budget_caps_exclude_unaffordable_products(client):
     assert sum(item["budget_cap_minor"] for item in look["items"]) == 100
 
 
+def test_look_can_be_replanned_and_refined_without_starting_over(client):
+    look = create_look(client, budget=400_000)
+    path = f"/api/clothes/looks/{look['id']}"
+
+    refined = client.post(
+        f"{path}/refine",
+        json={"kind": "popular_stores_only", "preserve_selected": True},
+    )
+    assert refined.status_code == 200, refined.text
+    refined_look = refined.json()
+    assert refined_look["brief"]["retailer_policy"] == "popular_first"
+    assert refined_look["plan_revision"] == look["plan_revision"] + 1
+
+    replanned = client.post(f"{path}/replan")
+    assert replanned.status_code == 200, replanned.text
+    assert replanned.json()["plan_revision"] == refined_look["plan_revision"] + 1
+
+
 def test_checklist_validation(client):
     look = create_look(client)
     path = f"/api/clothes/looks/{look['id']}/checklist"
@@ -171,6 +189,60 @@ def test_allocation_preserves_every_paisa(budget):
     allocate_budget(look)
     assert sum(item.budget_cap_minor for item in look.items) == budget
     assert all(item.budget_cap_minor >= 0 for item in look.items)
+
+
+def test_budget_plan_uses_realistic_roles_for_shirt_pants_and_footwear():
+    look = Look(
+        brief=LookBrief(occasion="Work dinner", total_budget_minor=400_000),
+        items=[ChecklistItem(category=c) for c in ("shirt", "pants", "footwear")],
+    )
+
+    allocate_budget(look)
+
+    split = {item.category: item.budget_cap_minor for item in look.items}
+    assert sum(split.values()) == 400_000
+    assert split["shirt"] >= 50_000
+    assert split["pants"] >= 65_000
+    assert split["footwear"] >= 70_000
+    assert max(split.values()) < 2 * min(split.values())
+    assert look.budget_plan.status == "estimating"
+    assert look.budget_plan.planned_total_minor == 400_000
+
+
+def test_verified_market_prices_reserve_a_complete_basket_within_budget():
+    def verified(category: str, pid: str, price: int):
+        return CatalogProduct(
+            id=pid,
+            category=category,
+            title=pid,
+            price_minor=price,
+            source="live",
+            price_source="page",
+            verification="json_ld",
+            availability="in_stock",
+            seller_label="marketplace",
+            style_score=75,
+        )
+
+    items = [ChecklistItem(category=c) for c in ("shirt", "pants", "footwear")]
+    for item, prices in zip(items, ((70_000, 110_000), (80_000, 120_000), (90_000, 130_000))):
+        item.pool = [verified(item.category, f"{item.category}-{price}", price) for price in prices]
+    look = Look(
+        brief=LookBrief(occasion="Work dinner", total_budget_minor=400_000),
+        items=items,
+    )
+
+    allocate_budget(look)
+
+    assert look.budget_plan.status == "ready"
+    assert look.budget_plan.feasible is True
+    assert look.budget_plan.minimum_complete_total_minor == 240_000
+    assert all(item.reserved_product_id for item in look.items)
+    assert all(
+        next(product for product in item.pool if product.id == item.reserved_product_id).price_minor
+        <= item.budget_cap_minor
+        for item in look.items
+    )
 
 
 def test_record_ownership(client):

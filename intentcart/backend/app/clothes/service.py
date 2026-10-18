@@ -115,10 +115,12 @@ class LookService:
         record = await self.store.get(uid, "looks", look_id)
         if record is None:
             raise LookError(404, "Record not found.")
-        return Look.model_validate(record)
+        # Hydrate records written before budget plans and retailer policies
+        # existed so older saved looks immediately receive the current plan.
+        return refresh(Look.model_validate(record))
 
     async def list_looks(self, uid: str) -> list[Look]:
-        return [Look.model_validate(record) for record in await self.store.list(uid, "looks")]
+        return [refresh(Look.model_validate(record)) for record in await self.store.list(uid, "looks")]
 
     async def save(self, uid: str, look: Look) -> Look:
         look.revision += 1

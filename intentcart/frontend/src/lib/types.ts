@@ -128,6 +128,24 @@ export interface Boutique {
   kind: 'local' | 'online'
 }
 export type DiscoveryStatus = 'idle' | 'searching' | 'ready' | 'no_results' | 'failed'
+export type RetailerPolicy = 'popular_first' | 'balanced' | 'independent_first' | 'independent_only'
+export interface PriceBand {
+  low_minor: number
+  typical_minor: number
+  high_minor: number
+  sample_count: number
+  source: 'fallback' | 'market' | 'selected'
+}
+export interface BudgetPlan {
+  revision: number
+  status: 'estimating' | 'surveying' | 'ready' | 'infeasible'
+  feasible: boolean | null
+  minimum_complete_total_minor: number
+  planned_total_minor: number
+  verified_item_count: number
+  open_item_count: number
+  note: string
+}
 export interface ChecklistItem {
   id: string
   category: Category
@@ -140,6 +158,11 @@ export interface ChecklistItem {
   discovery?: DiscoveryStatus
   discovery_note?: string
   boutiques?: Boutique[]
+  budget_role?: string
+  price_band?: PriceBand
+  planned_budget_minor?: number
+  reserved_product_id?: string | null
+  survey_status?: 'pending' | 'surveying' | 'ready' | 'no_verified_prices' | 'not_needed'
 }
 export interface InspirationItem {
   id: string
@@ -177,6 +200,7 @@ export interface Look {
     delivery_city?: string
     delivery_pin?: string
     small_business?: 'off' | 'prefer' | 'only'
+    retailer_policy?: RetailerPolicy
   }
   status: 'awaiting_checklist' | 'shopping' | 'assembled'
   items: ChecklistItem[]
@@ -191,6 +215,8 @@ export interface Look {
   inspiration?: InspirationItem[]
   concepts?: ConceptImage[]
   revision?: number
+  budget_plan?: BudgetPlan
+  plan_revision?: number
 }
 export const money = (minor: number) =>
   new Intl.NumberFormat('en-IN', {

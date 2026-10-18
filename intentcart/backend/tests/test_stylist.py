@@ -226,14 +226,14 @@ def test_discovery_disabled_marks_items_honestly():
 
 
 # ---------------------------------------------------------------------------- shortlist
-def product(pid, price, label, score=50, source="live"):
+def product(pid, price, label, score=50, source="live", url=None):
     return CatalogProduct(
         id=pid, category="earrings", title=pid, price_minor=price, source=source,
-        seller_label=label, style_score=score,
+        seller_label=label, style_score=score, url=url,
     )
 
 
-def test_shortlist_budget_rejections_and_small_business_slot():
+def test_shortlist_budget_rejections_and_retailer_policy():
     item = ChecklistItem(category="earrings", budget_cap_minor=60_000)
     item.pool = [
         product("m1", 40_000, "marketplace", 95),
@@ -241,15 +241,25 @@ def test_shortlist_budget_rejections_and_small_business_slot():
         product("m3", 42_000, "marketplace", 93),
         product("m4", 43_000, "marketplace", 92),
         product("indie", 50_000, "independent", 40),
+        product("verified", 49_000, "verified_small_business", 40),
         product("pricey", 90_000, "independent", 99),
         product("mine", 55_000, "unknown", source="user"),
     ]
     item.rejected_ids = ["m1"]
     ids = [p.id for p in shortlist(item, "prefer")]
-    assert ids[0] == "mine" and "indie" in ids and "pricey" not in ids and "m1" not in ids
+    assert ids[0] == "mine" and "verified" in ids and "pricey" not in ids and "m1" not in ids
     assert len(ids) == 4
-    assert [p.id for p in shortlist(item, "only")] == ["mine", "indie"]
+    assert [p.id for p in shortlist(item, "only")] == ["mine", "verified"]
     assert "indie" not in [p.id for p in shortlist(item, "off")]
+    # Popular-first ranks known platforms ahead of an unknown own-domain shop,
+    # even when the latter has a slightly higher style score.
+    item.pool = [
+        product("indie", 40_000, "independent", 99, url="https://shop.example/item"),
+        product("amazon", 42_000, "marketplace", 80, url="https://amazon.in/dp/item"),
+        product("myntra", 41_000, "marketplace", 75, url="https://myntra.com/item/buy"),
+    ]
+    item.rejected_ids = []
+    assert [p.id for p in shortlist(item, "popular_first")][:2] == ["myntra", "amazon"]
     # Clear mismatches (e.g. a bulk gift pack) are not shown, even when nothing else fits.
     item.pool = [product("bulk", 10_000, "independent", 20)]
     item.rejected_ids = []
@@ -275,6 +285,72 @@ def test_lock_requires_current_candidate_and_custom_categories_get_budget():
             await looks.item_action("u", look.id, dupatta.id, "lock", "p_invented")
         with pytest.raises(LookError):
             await looks.update_brief("u", look.id, {"total_budget_minor": -5})
+
+    asyncio.run(scenario())
+
+
+def test_removing_an_item_replans_the_remaining_budget():
+    async def scenario():
+        looks = LookService(MemoryStore())
+        look = await looks.create_for_session(
+            "u", "s", LookBrief(occasion="Work dinner", total_budget_minor=400_000)
+        )
+        await looks.propose_checklist(
+            "u",
+            look.id,
+            [PieceSpec(category=category) for category in ("shirt", "pants", "footwear")],
+        )
+        look = await looks.confirm_checklist(
+            "u",
+            look.id,
+            [ChecklistChoice(category=category) for category in ("shirt", "pants", "footwear")],
+        )
+        before_revision = look.plan_revision
+        before = {item.category: item.budget_cap_minor for item in look.items}
+        pants = next(item for item in look.items if item.category == "pants")
+
+        look = await looks.item_action("u", look.id, pants.id, "remove")
+
+        after = {item.category: item.budget_cap_minor for item in look.items}
+        assert look.plan_revision == before_revision + 1
+        assert after["pants"] == 0
+        assert after["shirt"] > before["shirt"]
+        assert after["footwear"] > before["footwear"]
+        assert after["shirt"] + after["footwear"] == 400_000
+        assert look.budget_plan.revision == look.plan_revision
+
+    asyncio.run(scenario())
+
+
+def test_saved_legacy_look_is_hydrated_with_a_current_budget_plan():
+    async def scenario():
+        store = MemoryStore()
+        looks = LookService(store)
+        look = await looks.create_for_session(
+            "u", "s", LookBrief(occasion="Dinner", total_budget_minor=400_000)
+        )
+        await looks.propose_checklist(
+            "u", look.id, [PieceSpec(category="shirt"), PieceSpec(category="pants")]
+        )
+        raw = (await store.get("u", "looks", look.id)).copy()
+        raw.pop("budget_plan", None)
+        raw.pop("plan_revision", None)
+        for item in raw["items"]:
+            for field in (
+                "budget_role",
+                "price_band",
+                "planned_budget_minor",
+                "reserved_product_id",
+                "survey_status",
+            ):
+                item.pop(field, None)
+        await store.put("u", "looks", look.id, raw)
+
+        loaded = await looks.get("u", look.id)
+
+        assert loaded.budget_plan.planned_total_minor == 400_000
+        assert sum(item.planned_budget_minor for item in loaded.items) == 400_000
+        assert {item.budget_role for item in loaded.items} == {"top", "bottom"}
 
     asyncio.run(scenario())
 

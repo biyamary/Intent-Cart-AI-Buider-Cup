@@ -9,7 +9,6 @@ from statistics import median
 
 from app.schemas import BudgetPlan, CatalogProduct, Look, PriceBand
 
-
 # Public for the demo-board category gate and backwards compatibility.
 WEIGHTS = {
     "outfit": 10,

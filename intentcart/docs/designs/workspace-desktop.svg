@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
   <title id="title">IntentCart stylist workspace, desktop concept</title>
-  <desc id="desc">Desktop workspace with sessions on the left, chat in the center, and an explainable budget plan with update controls on the right.</desc>
+  <desc id="desc">Desktop workspace with sessions on the left, an explainable look and budget plan in the center, and chat with a persistent composer on the right.</desc>
   <defs><style>.ui{font-family:Inter,Segoe UI,sans-serif}.serif{font-family:Georgia,serif}.ink{fill:#183d34}.muted{fill:#6b766f}.eye{font:700 9px Inter,Segoe UI,sans-serif;letter-spacing:1.4px;fill:#657568}.small{font:500 10px Inter,Segoe UI,sans-serif}.body{font:400 13px Inter,Segoe UI,sans-serif}.label{font:650 12px Inter,Segoe UI,sans-serif}.line{stroke:#dfe4dc;stroke-width:1}.num{fill:#7f9c4d}.numt{font:700 10px Inter,Segoe UI,sans-serif;fill:#fff}</style></defs>
   <rect width="1440" height="900" fill="#f7f7f2"/><rect width="1440" height="68" fill="#fff"/><line x1="0" y1="68" x2="1440" y2="68" class="line"/>
   <rect x="28" y="16" width="36" height="38" rx="10" fill="#183d34"/><text x="76" y="42" class="ui ink" font-size="23" font-weight="650">intentcart<tspan fill="#7f9c4d">.</tspan></text><text x="1245" y="40" class="small muted">My profile</text><circle cx="1320" cy="34" r="11" fill="none" stroke="#6b766f"/>
@@ -15,7 +15,7 @@
     <circle cx="232" cy="12" r="12" class="num"/><text x="232" y="16" text-anchor="middle" class="numt">1</text>
   </g>
 
-  <g transform="translate(280 126)">
+  <g transform="translate(670 126)">
     <rect width="750" height="748" rx="12" fill="#fff" stroke="#dfe4dc"/><rect width="750" height="72" rx="12" fill="#fff"/><line x1="0" y1="72" x2="750" y2="72" class="line"/><text x="24" y="30" class="eye">ACTIVE CHAT</text><text x="24" y="53" class="ui ink" font-size="19" font-weight="600">A smart-casual dinner look</text><text x="620" y="42" class="small muted">Mira is working · 8s</text><circle cx="738" cy="12" r="12" class="num"/><text x="738" y="16" text-anchor="middle" class="numt">2</text>
     <rect x="340" y="100" width="378" height="72" rx="10" fill="#edf2e8"/><text x="361" y="125" class="small muted">YOU</text><text x="361" y="149" class="body ink">Build a smart-casual dinner look under ₹4,000.</text>
     <circle cx="44" cy="211" r="20" fill="#6f805a"/><text x="44" y="217" text-anchor="middle" class="serif" fill="#fff" font-size="17">M</text><text x="76" y="207" class="label ink">Mira</text><text x="76" y="228" class="body muted">I’ll plan a realistic split before I search, so every item fits the total.</text>
@@ -23,12 +23,12 @@
     <circle cx="108" cy="315" r="10" fill="#789756"/><text x="108" y="319" text-anchor="middle" fill="#fff" font-size="11">✓</text><text x="130" y="319" class="body ink">Understanding your request</text>
     <circle cx="108" cy="352" r="10" fill="#789756"/><text x="108" y="356" text-anchor="middle" fill="#fff" font-size="11">✓</text><text x="130" y="356" class="body ink">Checking your preferences</text>
     <circle cx="108" cy="389" r="10" fill="#fff" stroke="#7f9c4d" stroke-width="3"/><text x="130" y="393" class="body ink" font-weight="650">Planning a realistic budget</text><text x="620" y="393" text-anchor="end" class="small muted">In progress</text>
-    <circle cx="108" cy="426" r="10" fill="#fff" stroke="#ccd4c9"/><text x="130" y="430" class="body muted">Searching preferred stores</text><text x="664" y="430" text-anchor="end" class="small muted">Stop</text>
+    <circle cx="108" cy="426" r="10" fill="#fff" stroke="#ccd4c9"/><text x="130" y="430" class="body muted">Searching preferred stores</text><text x="664" y="430" text-anchor="end" class="small muted">Next</text>
     <circle cx="674" cy="253" r="12" class="num"/><text x="674" y="257" text-anchor="middle" class="numt">3</text>
     <rect x="20" y="654" width="710" height="74" rx="10" fill="#fbfcf9" stroke="#cfd8cc"/><text x="42" y="686" class="body muted">Message Mira…</text><text x="42" y="708" class="small muted">Try “Make it more formal” or “Use popular stores only”</text><rect x="651" y="669" width="59" height="42" rx="8" fill="#183d34"/><text x="680" y="695" text-anchor="middle" class="label" fill="#fff">Send</text><circle cx="738" cy="642" r="12" class="num"/><text x="738" y="646" text-anchor="middle" class="numt">6</text>
   </g>
 
-  <g transform="translate(1046 126)">
+  <g transform="translate(280 126)">
     <rect width="374" height="748" rx="12" fill="#f0f3e9" stroke="#d9e1d3"/><text x="22" y="31" class="eye">YOUR LOOK</text><text x="22" y="60" class="ui ink" font-size="21" font-weight="600">Complete basket</text><rect x="249" y="39" width="102" height="28" rx="14" fill="#e2edd9"/><text x="300" y="57" text-anchor="middle" class="small" fill="#315b38">✓ Fits ₹4,000</text>
     <rect x="18" y="88" width="338" height="242" rx="10" fill="#fff" stroke="#dfe4dc"/><text x="36" y="116" class="eye">BUDGET PLAN</text><text x="335" y="116" text-anchor="end" class="small muted">Market checked</text>
     <text x="36" y="151" class="label ink">Shirt</text><text x="36" y="170" class="small muted">Typical ₹1,200–₹1,700</text><text x="335" y="159" text-anchor="end" class="label ink">₹1,400</text>

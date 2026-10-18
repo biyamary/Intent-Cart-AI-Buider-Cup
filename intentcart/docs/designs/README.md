@@ -14,7 +14,7 @@ These wireframes turn the October 2026 usability notes into a reviewable interfa
 1. **People before features.** The landing page introduces **Nia — Food Guide** and **Mira — Personal Stylist** by name anywhere a chat starts. Neither specialist is the default or visually secondary.
 2. **A message is the obvious first action.** Both hero actions use “Chat with…” language. Specialist cards repeat that action and supply a realistic starter prompt.
 3. **The workspace fits the viewport.** A compact header replaces the oversized page introduction. On desktop, sessions stay on the left and work happens on the right. The message list scrolls inside the workspace; the composer stays visible.
-4. **Progress without hidden reasoning.** The active turn displays plain-language stages such as “Planning your budget” and “Searching preferred stores,” an elapsed time, and a stop action. It never reveals private chain-of-thought.
+4. **Progress without hidden reasoning.** The active turn displays plain-language stages such as “Planning your budget” and “Searching preferred stores,” plus elapsed time. It never reveals private chain-of-thought.
 5. **Budget logic is inspectable.** The look panel shows an item range, the planned cap, reserved total, and redistribution after a change. A complete-basket check appears before results.
 6. **Refinement is an ordinary action.** “Update this look” stays visible after results, with fast presets and free text. Selected pieces remain locked unless the user changes that choice.
 7. **Mobile preserves focus.** Sessions move into a drawer and Chat/Look become explicit tabs. The composer remains attached to the bottom of the usable viewport.
@@ -55,20 +55,19 @@ These wireframes turn the October 2026 usability notes into a reviewable interfa
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ ← Home   Mira · Personal Stylist                           Profile          │
 ├───────────────┬─────────────────────────────────────┬──────────────────────┤
-│ SESSIONS      │ CHAT                                │ YOUR LOOK            │
-│ + New chat    │ compact conversation title       [2]│ Complete basket ✓    │
-│               │                                     │ Budget plan           │
-│ ● Dinner look │ You: smart-casual under ₹4,000      │ Shirt  ₹1,400         │
-│   Today       │                                     │ Pants  ₹1,500         │
-│ Interview     │ Mira: progress card                 │ Shoes  ₹1,100         │
-│ Weekend       │ ✓ Understanding your request        │ Total  ₹4,000      [4]│
-│               │ ● Planning your budget · 8s      [3]│                      │
-│               │ ○ Searching preferred stores       │ [ Update this look ]  │
-│               │                                     │ [5]                  │
-│               │                                     │                      │
-│               ├─────────────────────────────────────┤                      │
-│               │ Message Mira…              [Send]   │                      │
-│ [1]           │ Composer remains visible        [6] │                      │
+│ SESSIONS      │ YOUR LOOK                         │ CHAT                  │
+│ + New chat    │ Complete basket ✓                │ compact title     [2]│
+│               │ Budget plan                       │                       │
+│ ● Dinner look │ Shirt  ₹1,400                     │ You: smart-casual     │
+│   Today       │ Pants  ₹1,500                     │ under ₹4,000          │
+│ Interview     │ Shoes  ₹1,100                     │                       │
+│ Weekend       │ Total  ₹4,000                 [4]│ Mira: progress card  │
+│               │                                   │ ✓ Understanding      │
+│               │ [ Update this look ]         [5]│ ● Planning · 8s  [3]│
+│               │                                   │ ○ Searching stores   │
+│               │                                   ├───────────────────────┤
+│               │                                   │ Message Mira… [Send] │
+│ [1]           │                                   │ Always visible    [6]│
 └───────────────┴─────────────────────────────────────┴──────────────────────┘
 ```
 
@@ -83,9 +82,9 @@ These wireframes turn the October 2026 usability notes into a reviewable interfa
 
 | Width | Sessions | Chat and look | Composer |
 | --- | --- | --- | --- |
-| `≥ 1180px` | Persistent 240–280 px rail | Chat and look panel side by side | Pinned within chat column |
-| `768–1179px` | Collapsible rail | Chat with a Chat/Look switch | Pinned within workspace |
-| `< 768px` | Drawer opened from the top bar | One active tab at a time | Fixed to bottom of usable viewport |
+| `> 1250px` | Persistent 252 px rail | Look board left, chat right | Pinned within chat column |
+| `851–1250px` | Persistent 252 px rail | Chat/Look switch | Pinned within workspace |
+| `≤ 850px` | Drawer opened from the top bar | One active tab at a time | Pinned within the usable viewport |
 
 ## Accessibility notes
 

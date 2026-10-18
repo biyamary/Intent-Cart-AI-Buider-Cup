@@ -10,13 +10,14 @@ import {
   Plus,
   RefreshCw,
   Shirt,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Store,
   TrendingDown,
   X,
 } from 'lucide-react'
-import { api, post } from '../lib/api'
+import { api } from '../lib/api'
 import { money, type ChecklistItem, type Look, type Product, type SellerLabel } from '../lib/types'
 import { safeWebUrl } from '../lib/conversations'
 import { ErrorMessage } from './Feedback'
@@ -37,11 +38,33 @@ const statusText = {
 }
 
 function isSearching(look?: Look) {
-  return Boolean(look?.items.some((item) => item.discovery === 'searching'))
+  return Boolean(
+    look?.items.some((item) => item.discovery === 'searching') ||
+    look?.budget_plan?.status === 'surveying',
+  )
 }
 
-export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: string }) {
+type LookMutation = {
+  url: string
+  body?: unknown
+  method?: 'POST' | 'PATCH'
+}
+
+type RefineKind =
+  'cheaper' | 'more_formal' | 'more_casual' | 'change_colour' | 'popular_stores_only' | 'custom'
+
+export function LookPanel({
+  lookId,
+  sessionId,
+  onRefine,
+}: {
+  lookId: string
+  sessionId: string
+  onRefine: (prompt: string) => void
+}) {
   const cache = useQueryClient()
+  const [refineOpen, setRefineOpen] = useState(false)
+  const [refinement, setRefinement] = useState('')
   const path = `/clothes/looks/${lookId}`
   const look = useQuery({
     queryKey: ['look', lookId],
@@ -49,10 +72,20 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
     refetchInterval: (query) => (isSearching(query.state.data) ? 2500 : false),
   })
   const update = useMutation({
-    mutationFn: ({ url, body }: { url: string; body?: unknown }) => post<Look>(url, body),
-    onSuccess: (data) => cache.setQueryData(['look', lookId], data),
+    mutationFn: ({ url, body, method = 'POST' }: LookMutation) =>
+      api<Look>(url, {
+        method,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      cache.setQueryData(['look', lookId], data)
+      setRefinement('')
+    },
   })
-  const act = (url: string, body?: unknown) => update.mutate({ url: `${path}${url}`, body })
+  const act = (url: string, body?: unknown, method?: 'POST' | 'PATCH') =>
+    update.mutate({ url: `${path}${url}`, body, method })
+  const refine = (kind: RefineKind, request = '', colour = '') =>
+    act('/refine', { kind, request, colour, preserve_selected: true })
   const data = look.data
   if (look.isPending) return <aside className="panel look-panel">Loading your look board…</aside>
   if (!data)
@@ -72,14 +105,28 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
             <span className="eyebrow">YOUR LOOK BOARD</span>
             <h2>{data.brief.occasion}</h2>
           </div>
-          {data.brief.small_business && data.brief.small_business !== 'off' && (
-            <span className="seller-badge independent">
-              <Store size={12} />
-              {data.brief.small_business === 'only'
-                ? 'Small businesses only'
-                : 'Favouring small businesses'}
-            </span>
-          )}
+          <div className="look-header-actions">
+            {(data.brief.retailer_policy ?? 'popular_first') === 'popular_first' ? (
+              <span className="seller-badge brand">
+                <Store size={12} /> Popular stores first
+              </span>
+            ) : data.brief.small_business && data.brief.small_business !== 'off' ? (
+              <span className="seller-badge independent">
+                <Store size={12} />
+                {data.brief.small_business === 'only'
+                  ? 'Small businesses only'
+                  : 'Favouring small businesses'}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="small secondary"
+              aria-expanded={refineOpen}
+              onClick={() => setRefineOpen((current) => !current)}
+            >
+              <SlidersHorizontal size={13} /> Update look
+            </button>
+          </div>
         </div>
         <div className="budget-number">{money(data.remaining_budget_minor)}</div>
         <p>left of {money(data.brief.total_budget_minor)}</p>
@@ -98,6 +145,86 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
           </div>
         ) : null}
       </section>
+      {data.budget_plan && (
+        <BudgetPlanCard
+          key={data.plan_revision ?? data.budget_plan.revision}
+          look={data}
+          busy={busy}
+          onReplan={() => act('/replan')}
+        />
+      )}
+      {refineOpen && (
+        <section className="panel refine-look-panel stack compact" aria-label="Update this look">
+          <div>
+            <span className="eyebrow">REFINE WITH MIRA</span>
+            <h3>What should change?</h3>
+            <p className="muted small-copy">
+              Selected pieces stay in place unless you ask to replace them.
+            </p>
+          </div>
+          <div className="refine-chips" aria-label="Quick refinements">
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('cheaper')}
+            >
+              Make the full look cheaper
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('popular_stores_only')}
+            >
+              Show popular stores first
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('change_colour')}
+            >
+              Change the colour palette
+            </button>
+            <button
+              type="button"
+              className="secondary small"
+              disabled={busy}
+              onClick={() => refine('more_formal')}
+            >
+              Make the look more formal
+            </button>
+          </div>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!refinement.trim()) return
+              refine('custom', refinement.trim())
+            }}
+          >
+            <label className="sr-only" htmlFor={`refine-${lookId}`}>
+              Describe the change
+            </label>
+            <input
+              id={`refine-${lookId}`}
+              value={refinement}
+              maxLength={500}
+              onChange={(event) => setRefinement(event.target.value)}
+              placeholder="e.g. keep the shirt, find smarter trousers"
+            />
+            <button disabled={busy || !refinement.trim()}>Update look</button>
+          </form>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => onRefine('Help me decide what to change in this look.')}
+          >
+            Not sure? Discuss it with Mira
+          </button>
+        </section>
+      )}
       <ErrorMessage error={update.error} />
       <Inspiration look={data} sessionId={sessionId} />
       {data.status === 'awaiting_checklist' ? (
@@ -113,7 +240,7 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
               <Check size={16} /> Finish my look
             </button>
           )}
-          {data.status === 'assembled' && <Review look={data} />}
+          {data.status === 'assembled' && <Review look={data} onRefine={onRefine} />}
         </>
       )}
       <p className="fine-print">
@@ -122,6 +249,99 @@ export function LookPanel({ lookId, sessionId }: { lookId: string; sessionId: st
         illustrations, not products.
       </p>
     </aside>
+  )
+}
+
+function BudgetPlanCard({
+  look,
+  busy,
+  onReplan,
+}: {
+  look: Look
+  busy: boolean
+  onReplan: () => void
+}) {
+  const plan = look.budget_plan!
+  const activeItems = look.items.filter(
+    (item) => item.status === 'open' || item.status === 'locked',
+  )
+  const loading = plan.status === 'surveying'
+  const shortfall = Math.max(0, plan.minimum_complete_total_minor - look.brief.total_budget_minor)
+
+  return (
+    <section className={`panel budget-plan budget-plan-${plan.status}`} aria-live="polite">
+      <div className="budget-plan-heading">
+        <div>
+          <span className="eyebrow">SMART BUDGET · PLAN {plan.revision}</span>
+          <h3>{loading ? 'Checking realistic prices' : 'How your budget is split'}</h3>
+        </div>
+        {look.status !== 'awaiting_checklist' && (
+          <button
+            type="button"
+            className="small secondary"
+            disabled={busy || loading}
+            onClick={onReplan}
+          >
+            {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+            Recheck
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="budget-survey-progress" role="status">
+          <span className="budget-survey-pulse" aria-hidden="true" />
+          <p>
+            Mira is surveying prices for each piece before finalising the split and results. This
+            keeps the complete look inside your total budget.
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className={`budget-plan-note ${plan.feasible === false ? 'warning' : ''}`}>
+            {plan.note ||
+              (plan.feasible
+                ? `Planned total ${money(plan.planned_total_minor)} within your ${money(look.brief.total_budget_minor)} budget.`
+                : `A complete look may need about ${money(plan.minimum_complete_total_minor)}.`)}
+          </p>
+          {plan.feasible === false && shortfall > 0 && (
+            <p className="budget-shortfall">
+              Short by about <strong>{money(shortfall)}</strong>. Remove a piece, use something you
+              own, or ask Mira for a cheaper version.
+            </p>
+          )}
+          <div className="budget-split" role="list" aria-label="Budget by item">
+            {activeItems.map((item) => (
+              <div className="budget-split-row" role="listitem" key={item.id}>
+                <div>
+                  <strong className="capitalize">{item.category}</strong>
+                  {item.price_band && (
+                    <span>
+                      Typical range {money(item.price_band.low_minor)}–
+                      {money(item.price_band.high_minor)}
+                      {item.price_band.source === 'market' && item.price_band.sample_count
+                        ? ` · ${item.price_band.sample_count} checked`
+                        : item.price_band.source === 'selected'
+                          ? ' · selected price'
+                          : ' · estimated'}
+                    </span>
+                  )}
+                </div>
+                <strong>{money(item.planned_budget_minor ?? item.budget_cap_minor)}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="budget-plan-totals">
+            <span>
+              {plan.open_item_count
+                ? `${plan.verified_item_count} of ${plan.open_item_count} item ranges use live prices`
+                : 'All pieces are resolved'}
+            </span>
+            <strong>{money(plan.planned_total_minor)} planned</strong>
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 
@@ -549,7 +769,7 @@ export function LiveProductCard({
   )
 }
 
-function Review({ look }: { look: Look }) {
+function Review({ look, onRefine }: { look: Look; onRefine: (prompt: string) => void }) {
   const chosen = look.items.filter((item) => item.status === 'locked' && item.chosen_product)
   return (
     <section className="panel review-panel stack compact">
@@ -590,7 +810,14 @@ function Review({ look }: { look: Look }) {
         <span>Remaining budget</span>
         <strong>{money(look.remaining_budget_minor)}</strong>
       </div>
-      <p className="fine-print">Swap any single piece above without rebuilding the look.</p>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => onRefine('I want to update this look while keeping the pieces I selected.')}
+      >
+        <SlidersHorizontal size={14} /> Update this look
+      </button>
+      <p className="fine-print">Refine the full look or swap one piece without starting over.</p>
     </section>
   )
 }

@@ -47,7 +47,7 @@ def stylist_capabilities(settings: Settings) -> list[str]:
 AGENTS = {
     "stylist": AgentRegistration(
         key="stylist",
-        display_name="Shop a look",
+        display_name="Mira · Personal stylist",
         factory=create_stylist_agent,
         enabled=lambda settings: settings.stylist_mode == "gemini",
         capabilities=stylist_capabilities,
@@ -63,7 +63,7 @@ AGENTS = {
     ),
     "food": AgentRegistration(
         key="food",
-        display_name="Food companion",
+        display_name="Nia · Food guide",
         factory=lambda settings, services: create_food_chat_agent(settings),
         enabled=lambda settings: settings.food_mode == "gemini",
         capabilities=lambda settings: (

@@ -535,6 +535,7 @@ class ConversationService:
             return queued
         except Exception:
             self._active.discard(session_key)
+            raise
 
     def _finish_task(self, task_key: tuple[str, str, str, str], task: asyncio.Task):
         self._tasks.pop(task_key, None)
@@ -547,7 +548,6 @@ class ConversationService:
                 task_key[0],
                 type(error).__name__,
             )
-            raise
 
     async def _run_accepted(
         self,

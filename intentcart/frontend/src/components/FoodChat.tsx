@@ -1,18 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowUp, Globe, MessageSquare, Plus, Search, Sparkles, Utensils } from 'lucide-react'
+import { ArrowUp, Globe, MessageSquare, ScanLine, Search, Sparkles, Utensils } from 'lucide-react'
 import { api, post } from '../lib/api'
+import { useAgentTurn } from '../lib/agentTurns'
+import { agents as agentProfiles } from '../lib/agents'
 import type { AgentInfo, Conversation, ConversationSummary } from '../lib/conversations'
 import { AgentMessage } from './AgentMessage'
-import { ErrorMessage, PageTitle } from './Feedback'
+import { AgentPageHeader } from './AgentPageHeader'
+import { AgentProgress } from './AgentProgress'
+import { ErrorMessage } from './Feedback'
+import { SessionRail } from './SessionRail'
 
 const sessionPath = '/agents/food/sessions'
+const foodPresentation = agentProfiles.food
 const starters = [
-  'Hi! How can you help me check my food ingredients?',
   'Can you review the ingredients of my snack bar?',
-  'What is E171 (Titanium Dioxide) and why is it banned in Europe?',
-  'Check this cereal for my 4-year-old child: Whole grain wheat, sugar, malt extract, BHT.',
+  'What is E171 and why is it banned in Europe?',
+  'Check this cereal for my 4-year-old: whole grain wheat, sugar, malt extract, BHT.',
+]
+const foodProgress = [
+  { id: 'queued', label: 'Waiting to start' },
+  { id: 'understanding', label: 'Understanding your request' },
+  { id: 'researching', label: 'Checking trusted food sources' },
+  { id: 'preparing', label: 'Preparing your answer' },
 ]
 
 export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void }) {
@@ -20,7 +31,7 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
   const [params, setParams] = useSearchParams()
   const sessionId = params.get('food_chat')
   const [draft, setDraft] = useState('')
-  const end = useRef<HTMLDivElement>(null)
+  const messagePane = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
 
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<AgentInfo[]>('/agents') })
@@ -28,29 +39,32 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
   const enabled = foodAgent?.enabled ?? false
   const searchEnabled = foodAgent?.capabilities?.includes('google_search') ?? false
   const fetchEnabled = foodAgent?.capabilities?.includes('web_fetch') ?? false
-
   const history = useQuery({
     queryKey: ['food-sessions'],
     queryFn: () => api<ConversationSummary[]>(sessionPath),
   })
 
-  const send = useMutation({
-    retry: false,
-    mutationFn: async (body: { text: string; request_id: string }) => {
-      let id = sessionId
-      if (!id) {
-        const created = await post<Conversation>(sessionPath)
-        id = created.id
-        cache.setQueryData(['food-session', id], created)
-        setParams({ food_chat: id })
-      }
+  async function ensureSession() {
+    if (sessionId) return sessionId
+    const created = await post<Conversation>(sessionPath)
+    cache.setQueryData(['food-session', created.id], created)
+    setParams({ food_chat: created.id })
+    return created.id
+  }
+
+  const turn = useAgentTurn({
+    agentId: 'food',
+    ensureSession,
+    onAccepted: () => setDraft(''),
+    onFinished: async (_status, id) => {
       try {
-        const conversation = await post<Conversation>(`${sessionPath}/${id}/messages`, body)
-        cache.setQueryData(['food-session', id], conversation)
-        return conversation
+        const updated = await api<Conversation>(`${sessionPath}/${id}`)
+        cache.setQueryData(['food-session', id], updated)
       } finally {
-        void cache.invalidateQueries({ queryKey: ['food-session', id] })
-        void cache.invalidateQueries({ queryKey: ['food-sessions'] })
+        await Promise.all([
+          cache.invalidateQueries({ queryKey: ['food-session', id] }),
+          cache.invalidateQueries({ queryKey: ['food-sessions'] }),
+        ])
       }
     },
   })
@@ -58,272 +72,288 @@ export function FoodChat({ onSwitchToScanner }: { onSwitchToScanner?: () => void
   const conversation = useQuery({
     queryKey: ['food-session', sessionId],
     queryFn: () => api<Conversation>(`${sessionPath}/${sessionId}`),
-    enabled: Boolean(sessionId) && !send.isPending,
+    enabled: Boolean(sessionId) && !turn.isRunning,
     staleTime: 30_000,
     retry: false,
   })
 
   const messages = conversation.data?.messages ?? []
-  const pendingText = send.isPending ? send.variables.text : null
-  const busy = send.isPending || (Boolean(sessionId) && conversation.isPending)
+  const activeText = turn.activeRequest?.text
+  const acceptedUserSaved = messages.some(
+    (message) =>
+      message.role === 'user' &&
+      message.text === activeText &&
+      message.created_at * 1000 >= (turn.startedAt ?? 0) - 1000,
+  )
+  const pendingText =
+    (turn.sessionId === sessionId || (!sessionId && turn.sessionId)) && !acceptedUserSaved
+      ? (activeText ?? null)
+      : null
+  const busy = turn.isRunning || (Boolean(sessionId) && conversation.isPending)
   const composerDisabled = busy || !enabled
   const sendDisabled = busy || !enabled || !draft.trim() || conversation.isError
 
   useEffect(() => {
-    end.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
-  }, [messages.length, send.isPending])
-
-  useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7755/ingest/3c3b3e8e-46ba-4378-8d38-854e39ade4a8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d1c5c0'},body:JSON.stringify({sessionId:'d1c5c0',runId:'pre-fix',hypothesisId:'A',location:'FoodChat.tsx:state',message:'composer_state',data:{enabled,busy,sendPending:send.isPending,sendError:Boolean(send.error),conversationPending:conversation.isPending,conversationError:Boolean(conversation.isError),sessionId:Boolean(sessionId),sendDisabled,composerDisabled,errorCount:messages.filter((m)=>m.status==='error').length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-  }, [enabled, busy, send.isPending, send.error, conversation.isPending, conversation.isError, sessionId, sendDisabled, composerDisabled, messages])
+    const pane = messagePane.current
+    if (pane) pane.scrollTo({ top: pane.scrollHeight, behavior: 'auto' })
+  }, [messages.length, turn.isRunning, turn.status?.progress.stage])
 
   function submit() {
     const text = draft.trim()
-    const blocked = !text || busy || !enabled || conversation.isError
-    // #region agent log
-    fetch('http://127.0.0.1:7755/ingest/3c3b3e8e-46ba-4378-8d38-854e39ade4a8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d1c5c0'},body:JSON.stringify({sessionId:'d1c5c0',runId:'pre-fix',hypothesisId:'A',location:'FoodChat.tsx:submit',message:'submit_attempt',data:{blocked,reasons:{empty:!text,busy,disabled:!enabled,conversationError:Boolean(conversation.isError)},textLen:text.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-    if (blocked) return
-    send.mutate({ text, request_id: crypto.randomUUID() }, {
-      onError: (error) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7755/ingest/3c3b3e8e-46ba-4378-8d38-854e39ade4a8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d1c5c0'},body:JSON.stringify({sessionId:'d1c5c0',runId:'pre-fix',hypothesisId:'C',location:'FoodChat.tsx:onError',message:'send_failed',data:{name:error instanceof Error ? error.message.slice(0,80) : 'unknown'},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
-      },
-    })
-    setDraft('')
+    if (!text || busy || !enabled || conversation.isError) return
+    turn.send.mutate({ text, request_id: crypto.randomUUID() })
   }
 
   function selectConversation(id?: string) {
     setParams(id ? { food_chat: id } : {})
     setDraft('')
-    send.reset()
+    turn.send.reset()
   }
 
   return (
-    <>
-      <PageTitle
-        eyebrow="THE FOOD COMPANION"
+    <div className="agent-page food-agent-page">
+      <AgentPageHeader
+        eyebrow={`${foodPresentation.name.toUpperCase()} · ${foodPresentation.role.toUpperCase()}`}
         title="Decipher your ingredients, together."
-        description="A friendly conversational guide to decode food labels, demystify chemical additive terms, identify good vs bad ingredients, and check country regulations."
+        description="Paste a label or ask about an additive. Nia checks your preferences and explains the evidence in plain language."
+        actions={
+          <div className="agent-capabilities" aria-label="Available capabilities">
+            {searchEnabled && (
+              <span className="search-capability">
+                <Search size={13} /> Search
+              </span>
+            )}
+            {fetchEnabled && (
+              <span className="search-capability">
+                <Globe size={13} /> Evidence check
+              </span>
+            )}
+          </div>
+        }
       />
 
-      <div className="style-chat-layout">
-        <section className="panel conversation-panel" aria-label="Food companion conversation">
-          <div className="conversation-heading">
-            <div>
-              <span className="stylist-avatar" style={{ background: '#eaf4e6', color: '#2d6a4f' }}>
-                <Utensils size={18} />
-              </span>
-              <div>
-                <h2>Your food companion</h2>
-                <span className="muted">Demystifying ingredients &amp; regulations</span>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {searchEnabled && (
-                <span className="search-capability">
-                  <Search size={13} /> Google Search
-                </span>
-              )}
-              {fetchEnabled && (
-                <span className="search-capability">
-                  <Globe size={13} /> Official Evidence Fetch
-                </span>
-              )}
-            </div>
-          </div>
-
-          <ErrorMessage error={agents.error || conversation.error} />
-          {agents.isSuccess && !enabled && (
-            <div className="notice">
-              Live conversational food chat is not enabled in this environment. Set{' '}
-              <code>FOOD_AGENT_MODE=gemini</code> in <code>backend/.env</code> and configure
-              Vertex AI with a local Google Cloud login or a Gemini API key. Restart the backend
-              after changing these settings, then refresh this page.
-            </div>
-          )}
-
-          <div
-            className="conversation-messages"
-            role="log"
-            aria-label="Food conversation messages"
-            aria-live="polite"
-          >
-            {!sessionId && !pendingText && (
-              <div className="conversation-welcome">
-                <div className="welcome-spark" style={{ background: '#eaf4e6', color: '#2d6a4f' }}>
-                  <Sparkles size={29} strokeWidth={1.3} />
-                </div>
-                <h3>What ingredients are we looking at today?</h3>
-                <p>
-                  Greet me, paste an ingredient list, or ask about any additive. I will help decode
-                  the terms, check your allergies &amp; age suitability, identify good vs bad ingredients,
-                  and compare country regulations.
-                </p>
-                <div className="conversation-starters">
-                  {starters.map((text) => (
-                    <button
-                      className="secondary"
-                      key={text}
-                      disabled={busy || !enabled}
-                      onClick={() => {
-                        setDraft(text)
-                        composer.current?.focus()
-                      }}
-                    >
-                      {text}
-                      <span aria-hidden="true">↗</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {sessionId && conversation.isPending && !send.isPending && (
-              <p className="chat-loading">Loading your food review conversation…</p>
-            )}
-
-            {sessionId && conversation.isSuccess && !messages.length && !pendingText && (
-              <p className="chat-loading">
-                Say hello or paste an ingredient list to get started.
-              </p>
-            )}
-
-            {messages.map((message) => (
-              <AgentMessage
-                key={message.id}
-                message={message}
-                agentName="Food companion"
-                icon={<Utensils size={14} />}
-              />
-            ))}
-
-            {pendingText && (
-              <>
-                <article className="chat-message from-user">
-                  <div className="message-author">
-                    <strong>You</strong>
-                  </div>
-                  <p className="user-message-text">{pendingText}</p>
-                </article>
-                <div className="agent-working" role="status">
-                  <span className="working-dot" /> Your food companion is investigating…
-                </div>
-              </>
-            )}
-            <div ref={end} />
-          </div>
-
-          <ErrorMessage error={send.error} />
-
-          <form
-            className="chat-composer"
-            onSubmit={(e) => {
-              e.preventDefault()
-              submit()
-            }}
-          >
-            <label className="sr-only" htmlFor="food-message">
-              Message your food companion
-            </label>
-            <textarea
-              id="food-message"
-              ref={composer}
-              rows={2}
-              maxLength={4000}
-              disabled={composerDisabled}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Paste an ingredient list, mention a snack, or say hello…"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  submit()
-                }
-              }}
-            />
-            <button
-              aria-label="Send message"
-              disabled={sendDisabled}
-            >
-              <ArrowUp size={21} />
-            </button>
-          </form>
-
-          <p className="fine-print chat-footer-note">
-            Educational food ingredient and regulation review. Always check physical packaging for
-            official allergen warnings and ingredients.
-          </p>
-        </section>
-
-        <aside className="stack conversation-sidebar">
-          <button
-            className="secondary"
-            disabled={send.isPending}
-            onClick={() => selectConversation()}
-          >
-            <Plus size={16} /> Start a new review
-          </button>
-
-          <section className="panel tinted">
-            <span className="eyebrow">WHAT WE EXAMINE</span>
-            <h3>
-              Good vs. Bad.
-              <br />
-              Decoded for you.
-            </h3>
-            <p style={{ fontSize: '13px', lineHeight: '1.5' }}>
-              • <strong>Confirm &amp; Clean:</strong> Clarify confusing terms &amp; E-numbers.
-              <br />
-              • <strong>Allergies &amp; Age:</strong> Check suitability for your family.
-              <br />
-              • <strong>Good vs. Bad:</strong> Spot nutritious components vs. additives of concern.
-              <br />
-              • <strong>Regulations:</strong> Compare US (FDA), EU (EFSA), UK (FSA) &amp; India (FSSAI).
+      <div className="agent-workspace">
+        <SessionRail
+          title="Food reviews"
+          newLabel="New review"
+          disabled={turn.isRunning}
+          onNew={() => selectConversation()}
+          footer={
+            <p className="fine-print">
+              Educational guidance only. Always verify ingredients and allergen warnings on the
+              physical packaging.
             </p>
-            <Link className="text-link" to="/profile">
-              Edit allergy &amp; profile preferences ↗
-            </Link>
-          </section>
-
-          {onSwitchToScanner && (
-            <button className="secondary" type="button" onClick={onSwitchToScanner}>
-              📷 Use Barcode or Photo Scanner ↗
-            </button>
-          )}
-
-          <section className="panel">
+          }
+        >
+          <section className="session-group">
             <h3>
-              <MessageSquare size={16} /> Recent reviews
+              <MessageSquare size={15} /> Recent reviews
             </h3>
             <ErrorMessage error={history.error} />
-            {history.isPending && <p>Loading reviews…</p>}
+            {history.isPending && <p className="muted">Loading reviews…</p>}
             {history.data?.length ? (
               <div className="history-list">
                 {history.data.map((item) => (
                   <button
                     key={item.id}
+                    data-close-session-rail
+                    aria-current={sessionId === item.id ? 'page' : undefined}
                     className={`history-item ${sessionId === item.id ? 'current-conversation' : ''}`}
-                    disabled={send.isPending}
+                    disabled={turn.isRunning}
                     onClick={() => selectConversation(item.id)}
                   >
                     <strong>{item.title}</strong>
-                    <span>
-                      {new Date(item.updated_at * 1000).toLocaleDateString()} · Continue ↗
-                    </span>
+                    <span>{new Date(item.updated_at * 1000).toLocaleDateString()} · Continue</span>
                   </button>
                 ))}
               </div>
             ) : (
-              history.isSuccess && <p>Your past food reviews will appear here.</p>
+              history.isSuccess && <p className="muted">Your reviews will appear here.</p>
             )}
           </section>
-        </aside>
+
+          <section className="session-group session-help">
+            <span className="eyebrow">NIA CAN HELP WITH</span>
+            <ul>
+              <li>Ingredient and E-number explanations</li>
+              <li>Allergy and age-context checks</li>
+              <li>Country regulation comparisons</li>
+            </ul>
+            <Link className="text-link" to="/profile" data-close-session-rail>
+              Edit food preferences →
+            </Link>
+          </section>
+
+          {onSwitchToScanner && (
+            <button
+              className="secondary session-tool-button"
+              type="button"
+              data-close-session-rail
+              onClick={onSwitchToScanner}
+            >
+              <ScanLine size={16} /> Scan a barcode or photo
+            </button>
+          )}
+        </SessionRail>
+
+        <div className="agent-workspace-primary">
+          <section className="panel conversation-panel" aria-label="Nia food guide conversation">
+            <div className="conversation-heading">
+              <div>
+                <span className="stylist-avatar food-avatar">
+                  <Utensils size={18} />
+                </span>
+                <div>
+                  <h2>
+                    {foodPresentation.name} · {foodPresentation.role}
+                  </h2>
+                  <span className="muted">Ingredients, preferences and evidence</span>
+                </div>
+              </div>
+              <span className={`agent-availability ${enabled ? 'is-ready' : ''}`}>
+                {enabled ? 'Ready' : 'Offline'}
+              </span>
+            </div>
+
+            <ErrorMessage error={agents.error} />
+            {conversation.isError && (
+              <div className="notice error conversation-load-error" role="alert">
+                <span>{conversation.error.message}</span>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => void conversation.refetch()}
+                >
+                  Try loading again
+                </button>
+              </div>
+            )}
+            {agents.isSuccess && !enabled && (
+              <div className="notice">
+                Live food chat is not enabled in this environment. Configure the Food agent on the
+                server, then refresh this page.
+              </div>
+            )}
+
+            <div
+              ref={messagePane}
+              className="conversation-messages"
+              role="log"
+              aria-label="Food conversation messages"
+              aria-live="polite"
+            >
+              {!sessionId && !pendingText && (
+                <div className="conversation-welcome">
+                  <div className="welcome-spark food-avatar">
+                    <Sparkles size={29} strokeWidth={1.3} />
+                  </div>
+                  <h3>What ingredients are we looking at today?</h3>
+                  <p>
+                    Paste the label or ask about an additive. Nia will use your saved preferences
+                    and show sources when evidence is checked.
+                  </p>
+                  <div className="conversation-starters">
+                    {starters.map((text) => (
+                      <button
+                        className="secondary"
+                        key={text}
+                        disabled={busy || !enabled}
+                        onClick={() => {
+                          setDraft(text)
+                          composer.current?.focus()
+                        }}
+                      >
+                        {text}
+                        <span aria-hidden="true">→</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {sessionId && conversation.isPending && !turn.isRunning && (
+                <p className="chat-loading">Loading your review…</p>
+              )}
+              {sessionId && conversation.isSuccess && !messages.length && !pendingText && (
+                <p className="chat-loading">Paste an ingredient list or ask Nia a question.</p>
+              )}
+              {messages.map((message) => (
+                <AgentMessage
+                  key={message.id}
+                  message={message}
+                  agentName={`${foodPresentation.name} · ${foodPresentation.role}`}
+                  icon={<Utensils size={14} />}
+                />
+              ))}
+              {pendingText && (
+                <>
+                  <article className="chat-message from-user">
+                    <div className="message-author">
+                      <strong>You</strong>
+                    </div>
+                    <p className="user-message-text">{pendingText}</p>
+                  </article>
+                  <AgentProgress
+                    agentName="Nia is working"
+                    startedAt={turn.startedAt}
+                    stage={turn.status?.progress.stage}
+                    label={turn.status?.progress.label}
+                    stages={foodProgress}
+                  />
+                </>
+              )}
+            </div>
+
+            {turn.pollError && turn.activeRequest && (
+              <div className="notice amber progress-connection-notice" role="status">
+                <span>Your review is still running, but progress could not be refreshed.</span>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => void turn.retryProgress()}
+                >
+                  Reconnect
+                </button>
+              </div>
+            )}
+            <ErrorMessage error={turn.send.error} />
+            <form
+              className="chat-composer"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submit()
+              }}
+            >
+              <label className="sr-only" htmlFor="food-message">
+                Message Nia
+              </label>
+              <textarea
+                id="food-message"
+                ref={composer}
+                rows={2}
+                maxLength={4000}
+                disabled={composerDisabled}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Paste an ingredient list or ask Nia a question…"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    submit()
+                  }
+                }}
+              />
+              <button aria-label="Send message" disabled={sendDisabled}>
+                <ArrowUp size={21} />
+              </button>
+            </form>
+            <p className="fine-print chat-footer-note">
+              Nia can make mistakes. Check the original packaging for ingredients and allergen
+              warnings.
+            </p>
+          </section>
+        </div>
       </div>
-    </>
+    </div>
   )
 }
-
