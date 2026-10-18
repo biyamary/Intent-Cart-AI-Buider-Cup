@@ -1,0 +1,19 @@
+{
+  "_about": "Domains used to label sellers. A store matching neither list on its own domain is labelled 'independent'. Subdomains match (www2.hm.com matches hm.com). Keep this list conservative: a wrong 'marketplace' or 'brand' label only removes an independent badge.",
+  "marketplaces": [
+    "amazon.in", "amazon.com", "flipkart.com", "shopsy.in", "myntra.com", "ajio.com",
+    "nykaafashion.com", "nykaa.com", "meesho.com", "tatacliq.com", "snapdeal.com",
+    "jiomart.com", "limeroad.com", "etsy.com", "ebay.com", "walmart.com", "indiamart.com"
+  ],
+  "brands": [
+    "fabindia.com", "biba.in", "wforwoman.com", "manyavar.com", "westside.com", "zara.com",
+    "hm.com", "lifestylestores.com", "shoppersstop.com", "pantaloons.com", "maxfashion.in",
+    "tanishq.co.in", "caratlane.com", "bata.in", "bata.com", "metroshoes.com", "mochishoes.com",
+    "nike.com", "adidas.co.in", "puma.com", "uniqlo.com", "marksandspencer.in", "globaldesi.in",
+    "shopforaurelia.com", "mango.com", "reliancetrends.com", "vmart.co.in"
+  ],
+  "not_stores": [
+    "pinterest.com", "instagram.com", "facebook.com", "youtube.com", "wikipedia.org",
+    "google.com", "vogue.in", "vogue.com", "elle.com", "harpersbazaar.com", "reddit.com"
+  ]
+}

@@ -4,9 +4,10 @@ Use composition: each vertical owns its prompt and tools, while the application
 owns sessions, identity, limits and transport. Never store user state on an agent.
 """
 
+import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -24,6 +25,15 @@ class AgentDefinition:
     prompt_file: str
 
 
+def retrying(attempts: int) -> types.HttpOptions:
+    """Back off and retry transient quota/capacity errors (429/503) for this agent only."""
+    return types.HttpOptions(
+        retry_options=types.HttpRetryOptions(
+            attempts=attempts, initial_delay=2, max_delay=15, http_status_codes=[429, 503]
+        )
+    )
+
+
 def create_agent(
     definition: AgentDefinition,
     *,
@@ -31,12 +41,17 @@ def create_agent(
     tools: list[BaseTool] | None = None,
     output_schema: type[BaseModel] | None = None,
     conversational: bool = False,
-    context_instruction: Callable[[ReadonlyContext], str] | None = None,
+    context_instruction: Callable[[ReadonlyContext], str | Awaitable[str]] | None = None,
+    max_output_tokens: int = 4096,
+    retry_attempts: int = 0,
 ) -> LlmAgent:
     prompt = (PROMPT_DIR / definition.prompt_file).read_text(encoding="utf-8")
 
-    def instruction(context: ReadonlyContext) -> str:
-        return prompt + ("\n\n" + context_instruction(context) if context_instruction else "")
+    async def instruction(context: ReadonlyContext) -> str:
+        extra = context_instruction(context) if context_instruction else ""
+        if inspect.isawaitable(extra):
+            extra = await extra
+        return prompt + ("\n\n" + extra if extra else "")
 
     return LlmAgent(
         name=definition.name,
@@ -47,5 +62,8 @@ def create_agent(
         output_schema=output_schema,
         output_key=f"{definition.name}_output" if output_schema else None,
         include_contents="default" if conversational else "none",
-        generate_content_config=types.GenerateContentConfig(max_output_tokens=4096),
+        generate_content_config=types.GenerateContentConfig(
+            max_output_tokens=max_output_tokens,
+            http_options=retrying(retry_attempts) if retry_attempts > 1 else None,
+        ),
     )

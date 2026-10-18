@@ -1,6 +1,6 @@
 # IntentCart scaffold
 
-A shopping assistant with two flows: **Food label review** and **Shop a look**. Food reviews combine deterministic ingredient/profile checks, source-backed regulation and IARC data, optional gap research, citation verification, and grounded follow-ups. The stylist supports Google ADK conversations with optional Google Search. Structured look-board integrations remain scaffold placeholders.
+A shopping assistant with two flows: **Food label review** and **Shop a look**. Food reviews combine deterministic ingredient/profile checks, source-backed regulation and IARC data, optional gap research, citation verification, and grounded follow-ups. The stylist builds a complete look on a live board: reference images, a confirmable checklist, verified product discovery (with small-business labels), lock/swap per item, and AI concept images.
 
 The architecture document is used as product context. Your request takes precedence: **Google ADK replaces LangGraph**, and all model steps use configurable Gemini models. No cloud resources were created or deployed.
 
@@ -34,7 +34,7 @@ npm run dev
 
 No API keys are needed for the sample board and Food demo. Demo auth uses **one shared local user**; profile/board data stays in process memory and resets when the API restarts. Chat history uses a separate local SQLite store by default. Run one API worker locally. Do not expose demo auth as a private multi-user service.
 
-For live **Shop a look**, add `STYLIST_AGENT_MODE=gemini` and configure [Vertex AI with local ADC](docs/vertex-ai.md) or a server-side `GOOGLE_API_KEY` in `backend/.env`, keeping `AGENT_MODE=demo` if Food should remain a demo. Restart the API and open Clothes. See [conversational agents](docs/agents.md) for architecture, configuration, and the live smoke test.
+For live **Shop a look**, add `STYLIST_AGENT_MODE=gemini` and configure [Vertex AI with local ADC](docs/vertex-ai.md) or a server-side `GOOGLE_API_KEY` in `backend/.env`, keeping `AGENT_MODE=demo` if Food should remain a demo. Restart the API and open Clothes. Set `STYLIST_SEARCH_ENABLED=true` for live product discovery. See [Shop a Look](docs/shop-a-look.md) and [conversational agents](docs/agents.md) for architecture, configuration, and the live smoke tests.
 
 Keep `STYLIST_SEARCH_ENABLED=false` for conversational styling without browsing. To enable Google Search later, choose a compatible model/project with available grounding quota, set `STYLIST_SEARCH_ENABLED=true`, and restart the backend.
 
@@ -42,7 +42,7 @@ Keep `STYLIST_SEARCH_ENABLED=false` for conversational styling without browsing.
 
 **Food:** save `milk, peanut` as allergies in My profile → Food → Try a sample label → Review ingredients → edit and confirm the ingredient, contains, and may-contain fields → review purposes, IARC context and the country matrix. Recent labels can be reopened. Set `AGENT_MODE=gemini` for gap research and evidence-grounded follow-ups. See [food agent setup and evidence limits](docs/food-agent.md).
 
-**Shop a look:** say “I want an outfit for my sister's mehendi” → answer the stylist's questions → provide a budget and preferences → get outfit ideas and budget targets → refine the suggestions in conversation. Chats can be resumed from the sidebar. Text input is supported; reference images come later. Live product search is available when explicitly enabled.
+**Shop a look:** attach a reference photo and say “Help me recreate this Mehendi look, but with more affordable accessories” → give a budget → review the checklist on the board (own / remove / add) → confirm → products appear per item → lock pieces or ask for cheaper/matching alternatives → finish the look. Chats and their boards can be resumed from the sidebar.
 
 **Sample board (`/clothes/board`):** enter an occasion and budget → edit and confirm the checklist → select sample products → swap, own or remove pieces → assemble the look. This remains separate from agent chat for now.
 
@@ -60,7 +60,7 @@ Prices are integer paise in the API; ₹6,000 is `600000`. The backend recompute
 | Food photo | Validated upload route and transcription prompt; requires Gemini credentials, then user confirmation |
 | Food evidence | Reviewed regulation/IARC seeds, country matrix, hard-allowlisted fetch, Google Search via AgentTool, citation checks and expiring Firestore/memory evidence cache. Missing evidence remains unverified |
 | Clothes | Checklist confirmation; deterministic allocation; 14 illustrative seed products; lock/swap/owned/remove; final totals |
-| Clothes discovery | Stylist suggests outfit ideas and can search/cite sources when search is enabled. Structured product discovery/ranking, board mutation tools and reference-image interpretation are future extensions |
+| Clothes discovery | ADK 2 workflow per checklist item: Google Search nominates pages, prices/images/stock are read from each page's structured data, a ranking agent scores fit against locked pieces; independent sellers are labelled and favoured. Reference-image analysis/editing, Pinterest inspiration, Maps boutiques |
 | Auth / memory | Working local adapter; Firebase token verification, Google sign-in, and Firestore adapters included but not cloud-tested |
 | PWA / container | App-shell PWA configuration, manifest and icon; multi-stage Dockerfile for one Cloud Run service |
 | Deferred | SSE progress, shared production session storage, cloud image history, checkout, price tracking, furniture and accessories |
@@ -111,7 +111,7 @@ intentcart/
 4. For Firebase, enable Google sign-in and Firestore, set `GOOGLE_CLOUD_PROJECT`, `AUTH_MODE=firebase`, `STORE_BACKEND=firestore`, and use Application Default Credentials. Configure the matching `VITE_FIREBASE_*` values and `VITE_AUTH_MODE=firebase` in `frontend/.env`. Add the frontend origin to Firebase's authorized domains. The backend uses the Admin SDK; direct client database access is denied by `firestore.rules`.
 5. Populate and review the reference data, then implement the remaining adapters listed in [implementation-todos.md](docs/implementation-todos.md). Gemini explanations are not a replacement for deterministic checks or reviewed evidence.
 
-The ADK integration follows the official [Python quickstart](https://adk.dev/get-started/python/) and [LlmAgent structured output](https://adk.dev/agents/llm-agents/) APIs. Dependencies are pinned by `uv.lock`; this scaffold uses ADK 1.x to keep the initial integration bounded.
+The ADK integration follows the official [Python quickstart](https://adk.dev/get-started/python/) and [LlmAgent structured output](https://adk.dev/agents/llm-agents/) APIs. Dependencies are pinned by `uv.lock`; the app uses ADK 2.x (graph/dynamic workflows for product discovery).
 
 ## Verify
 

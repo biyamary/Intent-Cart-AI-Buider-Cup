@@ -45,3 +45,13 @@ class ParsedBrief(BaseModel):
     palette: list[str]
     suggested_categories: list[str]
     missing_information: list[str]
+
+
+class CandidateScore(BaseModel):
+    id: str = Field(max_length=40)
+    score: int = Field(ge=0, le=100)
+    reason: str = Field(default="", max_length=200)
+
+
+class RankResult(BaseModel):
+    scores: list[CandidateScore] = Field(default_factory=list, max_length=20)

@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     # Override conversational agents independently of global AGENT_MODE.
     stylist_agent_mode: Literal["demo", "gemini"] | None = None
     stylist_search_enabled: bool = False
+    # Shop a Look: generated concept boards, Maps-grounded boutiques and live discovery.
+    stylist_images_enabled: bool = True
+    stylist_maps_enabled: bool = False
+    stylist_max_llm_calls: int = Field(default=12, ge=1, le=30)
+    stylist_timeout_seconds: int = Field(default=120, ge=10, le=300)
+    discovery_timeout_seconds: int = Field(default=180, ge=20, le=600)
+    gemini_image_model: str = "gemini-3.1-flash-image"
+    artifact_backend: Literal["memory", "file", "gcs"] = "file"
+    artifact_dir: Path = BACKEND_DIR / ".data" / "artifacts"
+    artifact_bucket: str = ""
     food_agent_mode: Literal["demo", "gemini"] | None = None
     food_search_enabled: bool = True
     agent_session_backend: Literal["memory", "sqlite"] = "sqlite"
@@ -59,6 +69,8 @@ class Settings(BaseSettings):
             self.auth_mode == "firebase" or self.store_backend == "firestore"
         ) and not self.google_cloud_project:
             raise ValueError("Firebase/Firestore requires GOOGLE_CLOUD_PROJECT.")
+        if self.artifact_backend == "gcs" and not self.artifact_bucket:
+            raise ValueError("ARTIFACT_BACKEND=gcs requires ARTIFACT_BUCKET.")
         if self.enable_open_food_facts and "replace-with" in self.open_food_facts_user_agent:
             raise ValueError("Set an identifying OPEN_FOOD_FACTS_USER_AGENT first.")
         return self

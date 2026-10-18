@@ -99,6 +99,14 @@ def chat_client(request):
         yield client, model
 
 
+def tool_names(request) -> set[str]:
+    return {
+        declaration.name
+        for tool in request.config.tools or []
+        for declaration in tool.function_declarations or []
+    }
+
+
 def new_session(client):
     response = client.post("/api/agents/stylist/sessions")
     assert response.status_code == 201, response.text
@@ -142,7 +150,8 @@ def test_real_adk_runner_remembers_turns_and_preserves_grounding(chat_client):
     assert "sister's mehendi" in str(request.contents)
     assert "green" in str(request.config.system_instruction)
     assert "private-allergy" not in str(request)
-    assert any(tool.google_search is not None for tool in request.config.tools)
+    # Store search goes through the verified discovery workflow, not raw search in chat.
+    assert "find_products" in tool_names(request)
     history = client.get("/api/agents/stylist/sessions").json()
     assert history[0]["id"] == session_id
     assert history[0]["title"].startswith("I want an outfit")
@@ -154,19 +163,22 @@ def test_search_setting_controls_tools_prompt_and_public_capabilities(chat_clien
     search_enabled = client.app.state.settings.stylist_search_enabled
     info = client.get("/api/agents").json()[0]
     assert info["enabled"] is True
-    assert info["capabilities"] == (["google_search"] if search_enabled else [])
+    assert ("google_search" in info["capabilities"]) == search_enabled
+    assert ("product_discovery" in info["capabilities"]) == search_enabled
     session_id = new_session(client)
     response = send(client, session_id, "Please search for a green mehendi outfit under INR 6000")
     assert response.status_code == 200, response.text
     request = model._requests[-1]
-    assert (
-        any(tool.google_search is not None for tool in request.config.tools or []) == search_enabled
-    )
+    names = tool_names(request)
+    assert {"save_brief", "propose_checklist", "select_product"} <= names
+    assert ({"find_products", "find_alternatives", "find_inspiration"} <= names) == search_enabled
+    assert not any(tool.google_search is not None for tool in request.config.tools or [])
     instruction = str(request.config.system_instruction)
     assert f"Google Search is {'enabled' if search_enabled else 'disabled'}" in instruction
+    assert "Current look: none yet" in instruction
     if not search_enabled:
         assert "Do not claim to search" in instruction
-        assert not client.app.state.conversations.runner("stylist").agent.tools
+        assert not names & {"find_products", "find_alternatives", "find_inspiration"}
 
 
 def test_idempotency_and_user_isolation(chat_client):

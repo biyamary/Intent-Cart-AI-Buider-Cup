@@ -1,8 +1,13 @@
 # Conversational agents
 
-`/clothes` is now **Shop a look**: a text conversation with a Gemini stylist.
-The original deterministic sample board remains at `/clothes/board` and is not
-yet a tool the agent can edit. Reference-image input is a future extension.
+`/clothes` is now **Shop a look**: a Gemini stylist that builds a complete look on a
+live look board, with reference images, verified product discovery, small-business
+labels and AI concept images. See [shop-a-look.md](shop-a-look.md) for that flow.
+The original deterministic sample board remains at `/clothes/board`.
+
+Agents run on **Google ADK 2.x**. ADK 2 logs node failures with tracebacks and
+records `str(error)` on error events, so every runner is built through
+`app/agents/privacy.py` (`adk_app`), which redacts both.
 
 ## Enable and run
 

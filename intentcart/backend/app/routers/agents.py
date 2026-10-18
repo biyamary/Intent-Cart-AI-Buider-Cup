@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 
 from app.agents.conversation_schemas import (
     AgentInfo,
+    Attachment,
     ChatRequest,
     Conversation,
     ConversationSummary,
@@ -63,3 +64,39 @@ async def send_message(
     service: ConversationService = Depends(conversations),
 ):
     return await service.send(agent_id, uid, session_id, body, await profile_for(store, uid))
+
+
+@router.post(
+    "/{agent_id}/sessions/{session_id}/attachments", response_model=Attachment, status_code=201
+)
+async def upload_attachment(
+    agent_id: str,
+    session_id: str,
+    image: UploadFile = File(...),
+    uid: str = Depends(current_user),
+    service: ConversationService = Depends(conversations),
+):
+    data = await image.read(5 * 1024 * 1024 + 1)
+    await image.close()
+    name = await service.save_attachment(
+        agent_id, uid, session_id, data, image.content_type or ""
+    )
+    return Attachment(name=name)
+
+
+@router.get("/{agent_id}/sessions/{session_id}/artifacts/{name}", include_in_schema=False)
+async def read_artifact(
+    agent_id: str,
+    session_id: str,
+    name: str,
+    uid: str = Depends(current_user),
+    service: ConversationService = Depends(conversations),
+):
+    part = await service.load_artifact(agent_id, uid, session_id, name)
+    if part is None or part.inline_data is None:
+        raise HTTPException(404, "Image not found.")
+    return Response(
+        content=part.inline_data.data,
+        media_type=part.inline_data.mime_type or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"},
+    )

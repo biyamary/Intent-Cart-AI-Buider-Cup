@@ -2,10 +2,18 @@
 
 import asyncio
 import logging
+import re
+from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
 from google.adk.agents.run_config import RunConfig
+from google.adk.artifacts import (
+    BaseArtifactService,
+    FileArtifactService,
+    GcsArtifactService,
+    InMemoryArtifactService,
+)
 from google.adk.events import Event, EventActions
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, DatabaseSessionService, InMemorySessionService
@@ -19,11 +27,13 @@ from app.agents.conversation_schemas import (
 )
 from app.agents.errors import describe_agent_error
 from app.agents.grounding import public_message
+from app.agents.privacy import adk_app, install_log_redaction
 from app.agents.registry import AGENTS, AgentRegistration
 from app.config import Settings
 from app.schemas import Profile
 
 logger = logging.getLogger(__name__)
+install_log_redaction()
 
 
 def create_session_service(settings: Settings) -> BaseSessionService:
@@ -34,10 +44,42 @@ def create_session_service(settings: Settings) -> BaseSessionService:
     return DatabaseSessionService(db_url=f"sqlite+aiosqlite:///{path.as_posix()}")
 
 
+def create_artifact_service(settings: Settings) -> BaseArtifactService:
+    if settings.artifact_backend == "memory":
+        return InMemoryArtifactService()
+    if settings.artifact_backend == "gcs":
+        return GcsArtifactService(bucket_name=settings.artifact_bucket)
+    return FileArtifactService(root_dir=settings.artifact_dir)
+
+
+IMAGE_SIGNATURES = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/webp": (b"RIFF",),
+}
+IMAGE_EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+def valid_image(data: bytes, mime: str) -> bool:
+    if not any(data.startswith(sig) for sig in IMAGE_SIGNATURES.get(mime, ())):
+        return False
+    return mime != "image/webp" or data[8:12] == b"WEBP"
+
+
 class ConversationService:
-    def __init__(self, settings: Settings, sessions: BaseSessionService):
+    def __init__(
+        self,
+        settings: Settings,
+        sessions: BaseSessionService,
+        artifacts: BaseArtifactService | None = None,
+        services: Any = None,
+    ):
         self.settings = settings
         self.sessions = sessions
+        self.artifacts = artifacts or InMemoryArtifactService()
+        # App-level adapters handed to agent factories (e.g. look storage for the stylist).
+        self.services = services
         self.runners: dict[str, Runner] = {}
         # Whole-turn serialization. The current deployment contract is one worker.
         # Distributed deployments need a shared per-session lease, not only DB event locks.
@@ -66,9 +108,11 @@ class ConversationService:
         registration = self.registration(agent_id)
         if agent_id not in self.runners:
             self.runners[agent_id] = Runner(
-                agent=registration.factory(self.settings),
-                app_name=registration.app_name,
+                app=adk_app(
+                    registration.app_name, registration.factory(self.settings, self.services)
+                ),
                 session_service=self.sessions,
+                artifact_service=self.artifacts,
             )
         return self.runners[agent_id]
 
@@ -88,11 +132,10 @@ class ConversationService:
         return session
 
     def summary(self, agent_id: str, session) -> ConversationSummary:
-        default_title = "New review" if agent_id == "food" else "New look"
         return ConversationSummary(
             id=session.id,
             agent_id=agent_id,
-            title=session.state.get("chat:title", default_title),
+            title=session.state.get("chat:title", self.registration(agent_id).default_title),
             updated_at=session.last_update_time,
         )
 
@@ -102,7 +145,11 @@ class ConversationService:
         messages = [
             message for event in session.events if (message := public_message(event, root_name))
         ]
-        return Conversation(**self.summary(agent_id, session).model_dump(), messages=messages)
+        return Conversation(
+            **self.summary(agent_id, session).model_dump(),
+            messages=messages,
+            look_id=session.state.get("look:id"),
+        )
 
     async def list(self, agent_id: str, uid: str) -> list[ConversationSummary]:
         registration = self.registration(agent_id)
@@ -116,12 +163,11 @@ class ConversationService:
     async def create(self, agent_id: str, uid: str) -> Conversation:
         self.require_enabled(agent_id)
         registration = self.registration(agent_id)
-        default_title = "New review" if agent_id == "food" else "New look"
         session = await self.sessions.create_session(
             app_name=registration.app_name,
             user_id=uid,
             session_id=uuid4().hex,
-            state={"chat:title": default_title},
+            state={"chat:title": registration.default_title},
         )
         return Conversation(**self.summary(agent_id, session).model_dump())
 
@@ -130,22 +176,9 @@ class ConversationService:
     ) -> Conversation:
         self.require_enabled(agent_id)
         key = (agent_id, uid, session_id)
-        # region agent log
-        def _agent_dbg(hypothesis_id, location, message, **data):
-            import json, time
-            with open(r"c:\code\Intent-Cart-AI-Buider-Cup\debug-d1c5c0.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId":"d1c5c0","runId":"pre-fix","hypothesisId":hypothesis_id,"location":location,"message":message,"data":data,"timestamp":int(time.time()*1000)})+"\n")
-        # endregion
         if key in self._active:
-            # region agent log
-            _agent_dbg("D", "conversations.py:send", "blocked_active_turn", agent_id=agent_id, active_count=len(self._active))
-            # endregion
             raise HTTPException(409, "A reply is already in progress for this conversation.")
         self._active.add(key)
-        # region agent log
-        _agent_dbg("B", "conversations.py:send", "turn_start", agent_id=agent_id, timeout_s=self.settings.agent_timeout_seconds, text_len=len(body.text), active_count=len(self._active))
-        started = __import__("time").perf_counter()
-        # endregion
         try:
             session = await self.get_session(agent_id, uid, session_id)
             request_id = str(body.request_id)
@@ -169,10 +202,18 @@ class ConversationService:
                 "chat:request_id": request_id,
                 "temp:profile": registration.profile_context(profile),
             }
-            if session.state.get("chat:title") in ("New look", "New review"):
+            if body.attachments:
+                if not registration.accepts_images:
+                    raise HTTPException(422, "This assistant does not accept images.")
+                for name in body.attachments:
+                    if await self.load_artifact(agent_id, uid, session_id, name) is None:
+                        raise HTTPException(422, "An attached image is no longer available.")
+                state_delta["chat:attachments"] = list(body.attachments)
+                state_delta["temp:attachments"] = list(body.attachments)
+            if session.state.get("chat:title") == registration.default_title:
                 state_delta["chat:title"] = body.text[:80]
             try:
-                async with asyncio.timeout(self.settings.agent_timeout_seconds):
+                async with asyncio.timeout(registration.timeout_seconds(self.settings)):
                     has_answer = False
                     async for event in runner.run_async(
                         user_id=uid,
@@ -181,7 +222,9 @@ class ConversationService:
                             role="user", parts=[types.Part.from_text(text=body.text)]
                         ),
                         state_delta=state_delta,
-                        run_config=RunConfig(max_llm_calls=self.settings.agent_max_llm_calls),
+                        run_config=RunConfig(
+                            max_llm_calls=registration.max_llm_calls(self.settings)
+                        ),
                     ):
                         message = public_message(event, runner.agent.name)
                         if message and message.role == "assistant" and message.status == "complete":
@@ -199,9 +242,6 @@ class ConversationService:
                 raise
             except Exception as error:
                 failure = describe_agent_error(error)
-                # region agent log
-                _agent_dbg("B", "conversations.py:send", "turn_failed", agent_id=agent_id, error_type=type(error).__name__, status=failure.status, reason=failure.reason, elapsed_s=round(__import__("time").perf_counter()-started, 2), detail_prefix=failure.detail[:40])
-                # endregion
                 # No exception text, prompts, API keys, URLs or user content in logs.
                 logger.warning(
                     "Agent turn failed: agent=%s error_type=%s status=%s reason=%s retry_after=%s",
@@ -218,15 +258,47 @@ class ConversationService:
                     else None
                 )
                 raise HTTPException(failure.status, failure.detail, headers=headers) from None
-            # region agent log
-            _agent_dbg("B", "conversations.py:send", "turn_ok", agent_id=agent_id, elapsed_s=round(__import__("time").perf_counter()-started, 2), has_answer=True)
-            # endregion
             return await self.get(agent_id, uid, session_id)
         finally:
             self._active.discard(key)
-            # region agent log
-            _agent_dbg("D", "conversations.py:send", "turn_unlocked", agent_id=agent_id, active_count=len(self._active))
-            # endregion
+
+    async def save_attachment(
+        self, agent_id: str, uid: str, session_id: str, data: bytes, mime: str
+    ) -> str:
+        registration = self.registration(agent_id)
+        if not registration.accepts_images:
+            raise HTTPException(422, "This assistant does not accept images.")
+        await self.get_session(agent_id, uid, session_id)
+        if mime not in IMAGE_EXTENSIONS:
+            raise HTTPException(415, "Use a JPEG, PNG or WebP image.")
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Choose a non-empty image smaller than 5 MB.")
+        if not valid_image(data, mime):
+            raise HTTPException(415, "The file is not a valid JPEG, PNG or WebP image.")
+        name = f"ref-{uuid4().hex[:12]}.{IMAGE_EXTENSIONS[mime]}"
+        try:
+            await self.artifacts.save_artifact(
+                app_name=registration.app_name,
+                user_id=uid,
+                session_id=session_id,
+                filename=name,
+                artifact=types.Part.from_bytes(data=data, mime_type=mime),
+            )
+        except OSError:
+            # e.g. Windows path-length limits with a deep ARTIFACT_DIR (see docs/agents.md).
+            logger.warning("Attachment storage failed: agent=%s", agent_id)
+            raise HTTPException(503, "The image could not be stored. Try again later.") from None
+        return name
+
+    async def load_artifact(self, agent_id: str, uid: str, session_id: str, name: str):
+        """Load a session-scoped artifact; the session must belong to `uid`."""
+        registration = self.registration(agent_id)
+        await self.get_session(agent_id, uid, session_id)
+        if not re.fullmatch(r"(ref|concept)-[0-9a-f]{10,12}\.(jpg|png|webp)", name):
+            return None
+        return await self.artifacts.load_artifact(
+            app_name=registration.app_name, user_id=uid, session_id=session_id, filename=name
+        )
 
     async def record_failure(
         self, agent_id: str, uid: str, session_id: str, request_id: str, detail: str

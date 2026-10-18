@@ -24,3 +24,19 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 export const post = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+
+/** Fetch a protected image as an object URL; the caller must revoke it. */
+export async function apiObjectUrl(path: string): Promise<string> {
+  const token = await idToken()
+  const response = await fetch(`${base}/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (!response.ok) throw new Error(`Image unavailable (${response.status}).`)
+  return URL.createObjectURL(await response.blob())
+}
+
+export async function upload<T>(path: string, field: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append(field, file)
+  return api<T>(path, { method: 'POST', body: form })
+}

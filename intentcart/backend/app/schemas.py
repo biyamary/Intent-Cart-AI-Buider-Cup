@@ -171,46 +171,101 @@ class Answer(Contract):
     mode: Literal["demo", "gemini"]
 
 
+CategoryName = Annotated[
+    str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=1, max_length=40)
+]
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)]
+SmallBusinessPreference = Literal["off", "prefer", "only"]
+SellerLabel = Literal["verified_small_business", "independent", "marketplace", "brand", "unknown"]
+DiscoveryStatus = Literal["idle", "searching", "ready", "no_results", "failed"]
+MAX_CHECKLIST_ITEMS = 10
+
+
 class LookBrief(Contract):
     occasion: Text
     description: str = Field(default="", max_length=2000)
     total_budget_minor: int = Field(gt=0, le=100_000_000, strict=True)
     currency: Literal["INR"] = "INR"
-    event_date: str | None = None
+    event_date: str | None = Field(default=None, max_length=40)
+    sizes: ShortText = ""
+    colours: list[Text] = Field(default_factory=list, max_length=12)
+    avoid_colours: list[Text] = Field(default_factory=list, max_length=12)
+    platforms: list[Text] = Field(default_factory=list, max_length=12)
+    delivery_city: ShortText = ""
+    delivery_pin: str = Field(default="", pattern=r"^(\d{6})?$")
+    small_business: SmallBusinessPreference = "prefer"
+
+
+class PieceSpec(Contract):
+    category: CategoryName
+    target: str = Field(default="", max_length=300)
+
+
+class LookAnalysis(Contract):
+    summary: str = Field(default="", max_length=1200)
+    occasion: str = Field(default="", max_length=200)
+    palette: list[str] = Field(default_factory=list, max_length=12)
+    style_tags: list[str] = Field(default_factory=list, max_length=12)
+    pieces: list[PieceSpec] = Field(default_factory=list, max_length=MAX_CHECKLIST_ITEMS)
 
 
 class CatalogProduct(Contract):
     id: str
-    category: Category
+    category: CategoryName
     title: str
     price_minor: int = Field(ge=0)
     currency: Literal["INR"] = "INR"
     retailer: str = "Sample catalog"
     url: str | None = None
     image_url: str | None = None
-    colour: str
-    source: Literal["live", "seed"] = "seed"
+    colour: str = ""
+    source: Literal["live", "seed", "user"] = "seed"
     price_fetched_at: str | None = None
     match_reason: str = "Sample option for testing the look board."
+    # Live products: every field below comes from the fetched page, never the model.
+    price_source: Literal["catalog", "page", "user"] = "catalog"
+    verification: Literal["seed", "json_ld", "shopify", "open_graph", "user"] = "seed"
+    availability: Literal["in_stock", "out_of_stock", "unknown"] = "unknown"
+    rating: float | None = Field(default=None, ge=0, le=5)
+    rating_count: int | None = Field(default=None, ge=0)
+    seller_label: SellerLabel = "unknown"
+    seller_note: str = ""
+    style_score: int | None = Field(default=None, ge=0, le=100)
+
+
+class Boutique(Contract):
+    name: str
+    url: str | None = None
+    note: str = ""
+    kind: Literal["local", "online"] = "local"
 
 
 class ChecklistItem(Contract):
     id: str = Field(default_factory=new_id)
-    category: Category
+    category: CategoryName
+    target: str = Field(default="", max_length=300)
+    hints: list[str] = Field(default_factory=list, max_length=8)
     status: Literal["open", "locked", "owned", "removed"] = "open"
     budget_cap_minor: int = 0
     chosen_product: CatalogProduct | None = None
     candidates: list[CatalogProduct] = Field(default_factory=list)
+    # Verified live products for this item; `candidates` is the budget-filtered shortlist.
+    pool: list[CatalogProduct] = Field(default_factory=list)
+    rejected_ids: list[str] = Field(default_factory=list)
+    discovery: DiscoveryStatus = "idle"
+    discovery_note: str = ""
+    boutiques: list[Boutique] = Field(default_factory=list, max_length=8)
 
 
 class ChecklistChoice(Contract):
-    category: Category
+    category: CategoryName
     status: Literal["open", "owned", "removed"] = "open"
+    target: str = Field(default="", max_length=300)
 
 
 class ConfirmChecklist(Contract):
     confirmed: Literal[True]
-    items: list[ChecklistChoice] = Field(min_length=1, max_length=7)
+    items: list[ChecklistChoice] = Field(min_length=1, max_length=MAX_CHECKLIST_ITEMS)
 
     @model_validator(mode="after")
     def unique_categories(self):
@@ -222,8 +277,40 @@ class ConfirmChecklist(Contract):
 
 
 class ItemAction(Contract):
-    action: Literal["lock", "swap", "own", "remove", "reopen"]
+    action: Literal["lock", "swap", "own", "remove", "reopen", "reject"]
     product_id: str | None = None
+
+
+class AddItem(Contract):
+    category: CategoryName
+    target: str = Field(default="", max_length=300)
+
+
+class AddProductLink(Contract):
+    url: str = Field(min_length=8, max_length=2048)
+    price_minor: int | None = Field(default=None, gt=0, le=100_000_000, strict=True)
+
+
+class Alternatives(Contract):
+    request: str = Field(default="", max_length=300)
+    max_price_minor: int | None = Field(default=None, gt=0, le=100_000_000, strict=True)
+
+
+class InspirationItem(Contract):
+    id: str = Field(default_factory=new_id)
+    kind: Literal["pinterest", "web"]
+    url: str
+    title: str = ""
+    image_url: str | None = None
+    source: str = ""
+
+
+class ConceptImage(Contract):
+    id: str = Field(default_factory=new_id)
+    artifact: str
+    kind: Literal["concept", "reference_edit", "final"]
+    caption: str = ""
+    created_at: str = Field(default_factory=now)
 
 
 class Look(Contract):
@@ -235,3 +322,12 @@ class Look(Contract):
     remaining_budget_minor: int = 0
     styling_note: str = "Styling note placeholder."
     created_at: str = Field(default_factory=now)
+    # Agent-driven looks are linked to one stylist conversation and use live discovery.
+    mode: Literal["board", "agent"] = "board"
+    session_id: str | None = None
+    analysis: LookAnalysis | None = None
+    references: list[str] = Field(default_factory=list, max_length=6)
+    inspiration: list[InspirationItem] = Field(default_factory=list, max_length=12)
+    concepts: list[ConceptImage] = Field(default_factory=list, max_length=12)
+    revision: int = 0
+    updated_at: str = Field(default_factory=now)

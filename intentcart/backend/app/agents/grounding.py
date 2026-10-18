@@ -36,6 +36,10 @@ def public_message(event: Event, root_name: str) -> ChatMessage | None:
         text=text,
         created_at=event.timestamp,
     )
+    if message.role == "user":
+        attachments = event.actions.state_delta.get("chat:attachments")
+        if isinstance(attachments, list):
+            message.attachments = [name for name in attachments if isinstance(name, str)]
     metadata = event.grounding_metadata
     if message.role != "assistant" or metadata is None:
         return message
